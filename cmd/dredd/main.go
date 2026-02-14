@@ -177,7 +177,7 @@ func runServe() {
 	ext := extractor.New(llm, slog.Default())
 
 	// NATS/Hermes
-	hermesClient, err := hermes.NewClient(ctx, cfg.NatsURL, slog.Default())
+	hermesClient, err := hermes.NewClient(ctx, cfg.NatsURL, cfg.NatsToken, slog.Default())
 	if err != nil {
 		slog.Error("failed to connect to NATS", "error", err)
 		os.Exit(1)
@@ -195,7 +195,7 @@ func runServe() {
 	}
 
 	// Processor — the main pipeline
-	proc := processor.New(db, ext, hermesClient, slackPoster, slog.Default())
+	proc := processor.New(db, ext, hermesClient, slackPoster, cfg.ChronicleURL, slog.Default())
 
 	// Subscribe to transcript events
 	if err := hermesClient.Subscribe("swarm.chronicle.transcript.stored", proc.HandleTranscriptStored); err != nil {

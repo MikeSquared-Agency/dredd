@@ -16,11 +16,11 @@ type Client struct {
 	logger *slog.Logger
 }
 
-func NewClient(ctx context.Context, url string, logger *slog.Logger) (*Client, error) {
-	nc, err := nats.Connect(url,
+func NewClient(ctx context.Context, url, token string, logger *slog.Logger) (*Client, error) {
+	opts := []nats.Option{
 		nats.RetryOnFailedConnect(true),
 		nats.MaxReconnects(60),
-		nats.ReconnectWait(2*time.Second),
+		nats.ReconnectWait(2 * time.Second),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
 			if err != nil {
 				logger.Warn("nats disconnected", "error", err)
@@ -29,7 +29,12 @@ func NewClient(ctx context.Context, url string, logger *slog.Logger) (*Client, e
 		nats.ReconnectHandler(func(_ *nats.Conn) {
 			logger.Info("nats reconnected")
 		}),
-	)
+	}
+	if token != "" {
+		opts = append(opts, nats.Token(token))
+	}
+
+	nc, err := nats.Connect(url, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("nats connect: %w", err)
 	}

@@ -11,21 +11,22 @@ import (
 	"time"
 )
 
-func skipWithoutNATS(t *testing.T) string {
+func skipWithoutNATS(t *testing.T) (string, string) {
 	t.Helper()
 	url := os.Getenv("NATS_URL")
 	if url == "" {
 		t.Skip("NATS_URL not set, skipping integration test")
 	}
-	return url
+	token := os.Getenv("NATS_TOKEN")
+	return url, token
 }
 
 func TestIntegration_PubSub(t *testing.T) {
-	natsURL := skipWithoutNATS(t)
+	natsURL, natsToken := skipWithoutNATS(t)
 	ctx := context.Background()
 	logger := slog.Default()
 
-	client, err := NewClient(ctx, natsURL, logger)
+	client, err := NewClient(ctx, natsURL, natsToken, logger)
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}

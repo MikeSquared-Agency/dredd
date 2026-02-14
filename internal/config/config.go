@@ -8,6 +8,7 @@ import (
 type Config struct {
 	Port            int
 	NatsURL         string
+	NatsToken       string
 	DatabaseURL     string
 	LogLevel        string
 	AnthropicAPIKey string
@@ -21,6 +22,7 @@ func Load() Config {
 	return Config{
 		Port:            envInt("DREDD_PORT", 8750),
 		NatsURL:         envStr("NATS_URL", "nats://hermes:4222"),
+		NatsToken:       envStr("NATS_TOKEN", ""),
 		DatabaseURL:     envStr("DATABASE_URL", ""),
 		LogLevel:        envStr("LOG_LEVEL", "info"),
 		AnthropicAPIKey: envStr("ANTHROPIC_API_KEY", ""),

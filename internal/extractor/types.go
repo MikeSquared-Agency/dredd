@@ -9,7 +9,8 @@ type TranscriptEvent struct {
 	SessionRef string `json:"session_ref"`
 	Title      string `json:"title"`
 	Duration   string `json:"duration"`
-	Surface    string `json:"surface"` // e.g. "cc", "slack", "web"
+	Surface    string `json:"surface"`    // e.g. "cc", "slack", "web"
+	Transcript string `json:"transcript"` // full transcript text (preferred delivery method)
 }
 
 // ExtractionResult holds all extractions from a single transcript.
