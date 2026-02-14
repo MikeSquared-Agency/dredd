@@ -27,12 +27,26 @@ type Processor struct {
 	chronicleURL string
 
 	mu             sync.Mutex
-	pendingReviews map[string]*pendingReview
+	pendingReviews map[string]*pendingReview // keyed by header TS (for rejection thread replies)
+	pendingItems   map[string]*pendingItem   // keyed by per-item TS (for per-item reactions)
 }
 
+// pendingItem maps a single Slack thread-reply TS to its stored ID and extraction data.
+type pendingItem struct {
+	SessionRef string
+	OwnerUUID  uuid.UUID
+	Kind       string    // "decision" or "pattern"
+	Idx        int       // index into the original extraction result
+	StoredID   uuid.UUID // the DB id (decision or pattern)
+	Decision   *extractor.DecisionEpisode
+	Pattern    *extractor.ReasoningPattern
+}
+
+// pendingReview tracks the header TS and all item-level TSes for a review thread.
 type pendingReview struct {
 	SessionRef  string
 	OwnerUUID   uuid.UUID
+	HeaderTS    string
 	DecisionIDs []uuid.UUID
 	PatternIDs  []uuid.UUID
 	Decisions   []extractor.DecisionEpisode
@@ -48,6 +62,7 @@ func New(s *store.Store, ext *extractor.Extractor, h *hermes.Client, sl *slack.P
 		logger:         logger,
 		chronicleURL:   chronicleURL,
 		pendingReviews: make(map[string]*pendingReview),
+		pendingItems:   make(map[string]*pendingItem),
 	}
 }
 
@@ -94,20 +109,50 @@ func (p *Processor) HandleTranscriptStored(subject string, data []byte) {
 		return
 	}
 
-	// Post review summary to Slack.
+	// Post per-item review thread to Slack.
 	if p.slack != nil {
-		ts, err := p.slack.PostReviewSummary(ctx, result, evt.Title, evt.Surface, evt.Duration)
+		thread, err := p.slack.PostReviewThread(ctx, result, evt.Title, evt.Surface, evt.Duration)
 		if err != nil {
 			p.logger.Error("slack post failed", "error", err)
 		} else {
 			p.mu.Lock()
-			p.pendingReviews[ts] = &pendingReview{
+			// Store header-level review for rejection thread replies.
+			p.pendingReviews[thread.HeaderTS] = &pendingReview{
 				SessionRef:  evt.SessionRef,
 				OwnerUUID:   ownerUUID,
+				HeaderTS:    thread.HeaderTS,
 				DecisionIDs: decisionIDs,
 				PatternIDs:  patternIDs,
 				Decisions:   result.Decisions,
 				Patterns:    result.Patterns,
+			}
+			// Store per-item TS mappings for per-item reactions.
+			for _, item := range thread.Items {
+				pi := &pendingItem{
+					SessionRef: evt.SessionRef,
+					OwnerUUID:  ownerUUID,
+					Kind:       item.Kind,
+					Idx:        item.Idx,
+				}
+				switch item.Kind {
+				case "decision":
+					if item.Idx < len(decisionIDs) {
+						pi.StoredID = decisionIDs[item.Idx]
+					}
+					if item.Idx < len(result.Decisions) {
+						dec := result.Decisions[item.Idx]
+						pi.Decision = &dec
+					}
+				case "pattern":
+					if item.Idx < len(patternIDs) {
+						pi.StoredID = patternIDs[item.Idx]
+					}
+					if item.Idx < len(result.Patterns) {
+						pat := result.Patterns[item.Idx]
+						pi.Pattern = &pat
+					}
+				}
+				p.pendingItems[item.TS] = pi
 			}
 			p.mu.Unlock()
 		}
@@ -121,6 +166,7 @@ func (p *Processor) HandleTranscriptStored(subject string, data []byte) {
 }
 
 // HandleReaction processes Slack reaction feedback from slack-forwarder via NATS.
+// Reactions on per-item thread replies are mapped to the specific decision or pattern.
 func (p *Processor) HandleReaction(subject string, data []byte) {
 	ctx := context.Background()
 
@@ -135,6 +181,20 @@ func (p *Processor) HandleReaction(subject string, data []byte) {
 		return // not a review reaction
 	}
 
+	// Try per-item match first.
+	p.mu.Lock()
+	item, itemOK := p.pendingItems[evt.MessageTS]
+	if itemOK {
+		delete(p.pendingItems, evt.MessageTS)
+	}
+	p.mu.Unlock()
+
+	if itemOK {
+		p.handleItemReaction(ctx, item, verdict, evt.MessageTS)
+		return
+	}
+
+	// Fall back to header-level reaction (applies to all items in the review).
 	p.mu.Lock()
 	review, ok := p.pendingReviews[evt.MessageTS]
 	if !ok {
@@ -144,7 +204,7 @@ func (p *Processor) HandleReaction(subject string, data []byte) {
 	delete(p.pendingReviews, evt.MessageTS)
 	p.mu.Unlock()
 
-	p.logger.Info("processing review reaction",
+	p.logger.Info("processing header-level review reaction",
 		"reaction", evt.Reaction,
 		"verdict", string(verdict),
 		"session_ref", review.SessionRef,
@@ -157,8 +217,6 @@ func (p *Processor) HandleReaction(subject string, data []byte) {
 		if err := p.store.UpdateDecisionReviewStatus(ctx, id, status, ""); err != nil {
 			p.logger.Error("failed to update decision review", "decision_id", id, "error", err)
 		}
-
-		// Emit trust/feedback signals for confirmed/rejected decisions.
 		if verdict == slack.VerdictConfirmed || verdict == slack.VerdictRejected {
 			p.emitDecisionSignals(ctx, review, i, verdict)
 		}
@@ -171,7 +229,6 @@ func (p *Processor) HandleReaction(subject string, data []byte) {
 		}
 	}
 
-	// Emit pattern confirmation events.
 	if verdict == slack.VerdictConfirmed {
 		for _, pat := range review.Patterns {
 			if err := p.hermes.Publish("swarm.dredd.pattern.confirmed", map[string]any{
@@ -186,10 +243,117 @@ func (p *Processor) HandleReaction(subject string, data []byte) {
 		}
 	}
 
-	// On rejection, ask for correction in thread.
 	if verdict == slack.VerdictRejected && p.slack != nil {
 		if err := p.slack.PostThread(ctx, evt.MessageTS, "What did I get wrong? Your correction is the highest-value training signal."); err != nil {
 			p.logger.Error("failed to post correction thread", "error", err)
+		}
+	}
+}
+
+// handleItemReaction processes a reaction on a single per-item thread reply.
+func (p *Processor) handleItemReaction(ctx context.Context, item *pendingItem, verdict slack.ReviewVerdict, messageTS string) {
+	p.logger.Info("processing per-item review reaction",
+		"kind", item.Kind,
+		"verdict", string(verdict),
+		"stored_id", item.StoredID,
+		"session_ref", item.SessionRef,
+	)
+
+	status := string(verdict)
+
+	switch item.Kind {
+	case "decision":
+		if err := p.store.UpdateDecisionReviewStatus(ctx, item.StoredID, status, ""); err != nil {
+			p.logger.Error("failed to update decision review", "decision_id", item.StoredID, "error", err)
+		}
+		if (verdict == slack.VerdictConfirmed || verdict == slack.VerdictRejected) && item.Decision != nil {
+			correct := verdict == slack.VerdictConfirmed
+			dec := item.Decision
+
+			if dec.AgentID != "" {
+				if err := p.hermes.Publish("swarm.dredd.trust.signal", map[string]any{
+					"agent_id":    dec.AgentID,
+					"category":    dec.Category,
+					"outcome":     outcomeStr(correct),
+					"severity":    dec.Severity,
+					"session_ref": item.SessionRef,
+				}); err != nil {
+					p.logger.Error("failed to publish trust signal", "error", err)
+				}
+
+				rec, err := p.store.GetTrust(ctx, dec.AgentID, dec.Category, dec.Severity)
+				if err != nil {
+					score := trust.UpdateScoreWithSentiment(0.0, dec.Severity, correct, "")
+					total, correctCount := 1, 0
+					if correct {
+						correctCount = 1
+					}
+					if err := p.store.UpsertTrust(ctx, dec.AgentID, dec.Category, dec.Severity, score, total, correctCount, 0); err != nil {
+						p.logger.Error("failed to create trust record", "error", err)
+					}
+				} else {
+					newScore := trust.UpdateScoreWithSentiment(rec.TrustScore, dec.Severity, correct, "")
+					total := rec.TotalDecisions + 1
+					correctCount := rec.CorrectDecisions
+					if correct {
+						correctCount++
+					}
+					if err := p.store.UpsertTrust(ctx, dec.AgentID, dec.Category, dec.Severity, newScore, total, correctCount, rec.CriticalFailures); err != nil {
+						p.logger.Error("failed to update trust record", "error", err)
+					}
+				}
+			}
+
+			if dec.SignalType != "" {
+				if err := p.hermes.Publish("swarm.dredd.assignment.signal", map[string]any{
+					"signal_type": dec.SignalType,
+					"agent_id":    dec.AgentID,
+					"category":    dec.Category,
+					"severity":    dec.Severity,
+					"session_ref": item.SessionRef,
+				}); err != nil {
+					p.logger.Error("failed to publish assignment signal", "error", err)
+				}
+			}
+
+			if !correct {
+				if err := p.hermes.Publish("swarm.dredd.extraction.rejected", map[string]any{
+					"session_ref": item.SessionRef,
+					"decision":    dec.Summary,
+					"category":    dec.Category,
+				}); err != nil {
+					p.logger.Error("failed to publish extraction rejected", "error", err)
+				}
+			}
+		}
+
+		if verdict == slack.VerdictRejected && p.slack != nil {
+			if err := p.slack.PostThread(ctx, messageTS, "What did I get wrong? Your correction is the highest-value training signal."); err != nil {
+				p.logger.Error("failed to post correction thread", "error", err)
+			}
+		}
+
+	case "pattern":
+		if err := p.store.UpdatePatternReviewStatus(ctx, item.StoredID, status, ""); err != nil {
+			p.logger.Error("failed to update pattern review", "pattern_id", item.StoredID, "error", err)
+		}
+
+		if verdict == slack.VerdictConfirmed && item.Pattern != nil {
+			if err := p.hermes.Publish("swarm.dredd.pattern.confirmed", map[string]any{
+				"pattern_type": item.Pattern.PatternType,
+				"summary":      item.Pattern.Summary,
+				"tags":         item.Pattern.Tags,
+				"owner_uuid":   item.OwnerUUID.String(),
+				"session_ref":  item.SessionRef,
+			}); err != nil {
+				p.logger.Error("failed to publish pattern confirmed", "error", err)
+			}
+		}
+
+		if verdict == slack.VerdictRejected && p.slack != nil {
+			if err := p.slack.PostThread(ctx, messageTS, "What did I get wrong about this pattern?"); err != nil {
+				p.logger.Error("failed to post correction thread", "error", err)
+			}
 		}
 	}
 }
@@ -217,7 +381,8 @@ func (p *Processor) emitDecisionSignals(ctx context.Context, review *pendingRevi
 		rec, err := p.store.GetTrust(ctx, dec.AgentID, dec.Category, dec.Severity)
 		if err != nil {
 			// First signal for this combination — create new record.
-			score := trust.UpdateScore(0.0, dec.Severity, correct)
+			// Sentiment defaults to empty (modifier=1.0) until sentiment detection is wired in.
+			score := trust.UpdateScoreWithSentiment(0.0, dec.Severity, correct, "")
 			total, correctCount := 1, 0
 			if correct {
 				correctCount = 1
@@ -226,7 +391,7 @@ func (p *Processor) emitDecisionSignals(ctx context.Context, review *pendingRevi
 				p.logger.Error("failed to create trust record", "error", err)
 			}
 		} else {
-			newScore := trust.UpdateScore(rec.TrustScore, dec.Severity, correct)
+			newScore := trust.UpdateScoreWithSentiment(rec.TrustScore, dec.Severity, correct, "")
 			total := rec.TotalDecisions + 1
 			correctCount := rec.CorrectDecisions
 			if correct {

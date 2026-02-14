@@ -14,12 +14,36 @@ func SignalWeight(severity string) float64 {
 	}
 }
 
+// SentimentModifier returns the scaling factor for a given sentiment state.
+// Spec: flow=1.0, stressed=0.7, frustrated=0.5, unknown/default=1.0.
+func SentimentModifier(sentiment string) float64 {
+	switch sentiment {
+	case "flow":
+		return 1.0
+	case "stressed":
+		return 0.7
+	case "frustrated":
+		return 0.5
+	default:
+		return 1.0
+	}
+}
+
 // UpdateScore calculates the new trust score after a signal.
 //
 // direction: +1 for correct, -1 for wrong
 // Degradation is asymmetric: wrong decisions count 2x.
 func UpdateScore(currentScore float64, severity string, correct bool) float64 {
-	weight := SignalWeight(severity)
+	return UpdateScoreWithSentiment(currentScore, severity, correct, "")
+}
+
+// UpdateScoreWithSentiment calculates the new trust score after a signal,
+// scaling the weight by the sentiment modifier.
+//
+// Formula: new_score = old_score + (signal_weight x sentiment_modifier x direction)
+// Degradation is asymmetric: wrong decisions count 2x.
+func UpdateScoreWithSentiment(currentScore float64, severity string, correct bool, sentiment string) float64 {
+	weight := SignalWeight(severity) * SentimentModifier(sentiment)
 
 	if correct {
 		return clamp(currentScore + weight)
