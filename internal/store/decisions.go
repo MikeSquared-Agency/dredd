@@ -10,7 +10,7 @@ import (
 
 // WriteDecisionEpisode writes a full decision episode across the Decision Engine tables.
 // Tables: decisions, decision_context, decision_options, decision_reasoning, decision_tags.
-func (s *Store) WriteDecisionEpisode(ctx context.Context, ownerUUID uuid.UUID, sessionRef string, ep extractor.DecisionEpisode) (uuid.UUID, error) {
+func (s *Store) WriteDecisionEpisode(ctx context.Context, ownerUUID uuid.UUID, sessionRef, source string, ep extractor.DecisionEpisode) (uuid.UUID, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("begin tx: %w", err)
@@ -21,8 +21,8 @@ func (s *Store) WriteDecisionEpisode(ctx context.Context, ownerUUID uuid.UUID, s
 	decisionID := uuid.New()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO decisions (id, domain, category, severity, source, decided_by, summary, session_ref, created_at)
-		VALUES ($1, $2, $3, $4, 'dredd', $5, $6, $7, now())`,
-		decisionID, ep.Domain, ep.Category, ep.Severity, ownerUUID, ep.Summary, sessionRef,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
+		decisionID, ep.Domain, ep.Category, ep.Severity, source, ownerUUID, ep.Summary, sessionRef,
 	)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("insert decision: %w", err)

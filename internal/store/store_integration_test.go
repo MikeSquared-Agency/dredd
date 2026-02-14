@@ -127,7 +127,7 @@ func TestIntegration_WriteDecisionEpisode(t *testing.T) {
 		Confidence: 0.95,
 	}
 
-	id, err := s.WriteDecisionEpisode(ctx, ownerUUID, sessionRef, ep)
+	id, err := s.WriteDecisionEpisode(ctx, ownerUUID, sessionRef, "dredd", ep)
 	if err != nil {
 		t.Fatalf("WriteDecisionEpisode failed: %v", err)
 	}
