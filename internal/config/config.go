@@ -16,6 +16,7 @@ type Config struct {
 	SlackBotToken   string
 	SlackChannel    string
 	ChronicleURL    string
+	APIToken        string
 }
 
 func Load() Config {
@@ -30,6 +31,7 @@ func Load() Config {
 		SlackBotToken:   envStr("SLACK_BOT_TOKEN", ""),
 		SlackChannel:    envStr("SLACK_DECISIONS_CHANNEL", ""),
 		ChronicleURL:    envStr("CHRONICLE_URL", "http://chronicle:8700"),
+		APIToken:        envStr("DREDD_API_TOKEN", ""),
 	}
 }
 

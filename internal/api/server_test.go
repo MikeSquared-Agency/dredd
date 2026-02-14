@@ -8,7 +8,7 @@ import (
 )
 
 func TestHealthEndpoint(t *testing.T) {
-	srv := NewServer(8750)
+	srv := NewServer(8750, "test-token")
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
@@ -27,10 +27,24 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
-func TestStatusEndpoint(t *testing.T) {
-	srv := NewServer(8750)
+func TestHealthEndpoint_NoAuthRequired(t *testing.T) {
+	// Health must be accessible without any token, even when auth is configured.
+	srv := NewServer(8750, "some-secret")
+
+	req := httptest.NewRequest("GET", "/health", nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 without auth header, got %d", w.Code)
+	}
+}
+
+func TestStatusEndpoint_WithValidToken(t *testing.T) {
+	srv := NewServer(8750, "test-token")
 
 	req := httptest.NewRequest("GET", "/api/v1/dredd/status", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
 	srv.router.ServeHTTP(w, req)
 
@@ -50,8 +64,47 @@ func TestStatusEndpoint(t *testing.T) {
 	}
 }
 
+func TestStatusEndpoint_Unauthorized(t *testing.T) {
+	srv := NewServer(8750, "test-token")
+
+	// No Authorization header.
+	req := httptest.NewRequest("GET", "/api/v1/dredd/status", nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestStatusEndpoint_WrongToken(t *testing.T) {
+	srv := NewServer(8750, "test-token")
+
+	req := httptest.NewRequest("GET", "/api/v1/dredd/status", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestStatusEndpoint_NoTokenConfigured(t *testing.T) {
+	// When no API token is configured, all requests are allowed.
+	srv := NewServer(8750, "")
+
+	req := httptest.NewRequest("GET", "/api/v1/dredd/status", nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 when no token configured, got %d", w.Code)
+	}
+}
+
 func TestNotFoundEndpoint(t *testing.T) {
-	srv := NewServer(8750)
+	srv := NewServer(8750, "")
 
 	req := httptest.NewRequest("GET", "/nonexistent", nil)
 	w := httptest.NewRecorder()

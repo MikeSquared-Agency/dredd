@@ -24,3 +24,14 @@ const (
 	SourceCC FileSource = iota
 	SourceGateway
 )
+
+// FileSummary tracks extraction counts for a single source file.
+type FileSummary struct {
+	Path      string
+	Source    string // "cc", "gateway", or custom --source value
+	Date      string // YYYY-MM-DD of the first message
+	Decisions int
+	Patterns  int
+	Chunks    int
+	Errors    int
+}

@@ -109,6 +109,120 @@ func TestCriticalFailureDrop(t *testing.T) {
 	}
 }
 
+func TestSentimentModifier(t *testing.T) {
+	tests := []struct {
+		name      string
+		sentiment string
+		want      float64
+	}{
+		{"flow", "flow", 1.0},
+		{"stressed", "stressed", 0.7},
+		{"frustrated", "frustrated", 0.5},
+		{"empty defaults to 1.0", "", 1.0},
+		{"unknown defaults to 1.0", "happy", 1.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SentimentModifier(tt.sentiment)
+			if got != tt.want {
+				t.Errorf("SentimentModifier(%q) = %f, want %f", tt.sentiment, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpdateScoreWithSentiment_Flow(t *testing.T) {
+	// Flow sentiment (1.0) should behave identically to UpdateScore.
+	tests := []struct {
+		name     string
+		current  float64
+		severity string
+		correct  bool
+		want     float64
+	}{
+		{"flow correct routine", 0.5, "routine", true, 0.51},
+		{"flow wrong routine", 0.5, "routine", false, 0.48},
+		{"flow correct critical", 0.0, "critical", true, 0.05},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpdateScoreWithSentiment(tt.current, tt.severity, tt.correct, "flow")
+			base := UpdateScore(tt.current, tt.severity, tt.correct)
+			if math.Abs(got-tt.want) > 0.001 {
+				t.Errorf("UpdateScoreWithSentiment(%f, %q, %v, \"flow\") = %f, want %f", tt.current, tt.severity, tt.correct, got, tt.want)
+			}
+			if math.Abs(got-base) > 0.001 {
+				t.Errorf("flow sentiment should match UpdateScore: got %f, base %f", got, base)
+			}
+		})
+	}
+}
+
+func TestUpdateScoreWithSentiment_Stressed(t *testing.T) {
+	// Stressed sentiment (0.7) scales the weight down.
+	tests := []struct {
+		name     string
+		current  float64
+		severity string
+		correct  bool
+		want     float64
+	}{
+		// routine weight=0.01, stressed=0.7: effective=0.007
+		{"stressed correct routine", 0.5, "routine", true, 0.507},
+		// routine weight=0.01, stressed=0.7: effective=0.007, 2x degradation=0.014
+		{"stressed wrong routine", 0.5, "routine", false, 0.486},
+		// significant weight=0.03, stressed=0.7: effective=0.021
+		{"stressed correct significant", 0.5, "significant", true, 0.521},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpdateScoreWithSentiment(tt.current, tt.severity, tt.correct, "stressed")
+			if math.Abs(got-tt.want) > 0.001 {
+				t.Errorf("UpdateScoreWithSentiment(%f, %q, %v, \"stressed\") = %f, want %f", tt.current, tt.severity, tt.correct, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpdateScoreWithSentiment_Frustrated(t *testing.T) {
+	// Frustrated sentiment (0.5) halves the weight.
+	tests := []struct {
+		name     string
+		current  float64
+		severity string
+		correct  bool
+		want     float64
+	}{
+		// routine weight=0.01, frustrated=0.5: effective=0.005
+		{"frustrated correct routine", 0.5, "routine", true, 0.505},
+		// routine weight=0.01, frustrated=0.5: effective=0.005, 2x degradation=0.01
+		{"frustrated wrong routine", 0.5, "routine", false, 0.49},
+		// critical weight=0.05, frustrated=0.5: effective=0.025
+		{"frustrated correct critical", 0.0, "critical", true, 0.025},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpdateScoreWithSentiment(tt.current, tt.severity, tt.correct, "frustrated")
+			if math.Abs(got-tt.want) > 0.001 {
+				t.Errorf("UpdateScoreWithSentiment(%f, %q, %v, \"frustrated\") = %f, want %f", tt.current, tt.severity, tt.correct, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpdateScoreWithSentiment_EmptyDefaultsToFlow(t *testing.T) {
+	// Empty sentiment should behave the same as "flow" (modifier=1.0).
+	got := UpdateScoreWithSentiment(0.5, "routine", true, "")
+	base := UpdateScore(0.5, "routine", true)
+	if math.Abs(got-base) > 0.001 {
+		t.Errorf("empty sentiment should match UpdateScore: got %f, base %f", got, base)
+	}
+}
+
 func TestDecayScore(t *testing.T) {
 	tests := []struct {
 		name      string

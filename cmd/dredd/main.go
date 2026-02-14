@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -48,6 +49,8 @@ func runBackfill(args []string) {
 	minMessages := fs.Int("min-messages", 5, "Minimum messages per conversation to process")
 	owner := fs.String("owner", "9f6ed519-5763-4e30-9c2f-5580e0c57703", "Owner UUID for extracted records")
 	singleFile := fs.String("file", "", "Process a single file instead of directories")
+	source := fs.String("source", "backfill", "Source label for persisted records")
+	skipSubagents := fs.Bool("skip-subagents", true, "Skip conversations with no human messages")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "parse flags: %v\n", err)
@@ -62,14 +65,20 @@ func runBackfill(args []string) {
 		os.Exit(1)
 	}
 
+	envCfg := config.Load()
+
 	cfg := backfill.Config{
-		CCDir:       *ccDir,
-		GatewayDir:  *gatewayDir,
-		DryRun:      *dryRun,
-		BatchSize:   *batchSize,
-		MinMessages: *minMessages,
-		OwnerUUID:   ownerUUID,
-		SingleFile:  *singleFile,
+		CCDir:         *ccDir,
+		GatewayDir:    *gatewayDir,
+		DryRun:        *dryRun,
+		BatchSize:     *batchSize,
+		MinMessages:   *minMessages,
+		OwnerUUID:     ownerUUID,
+		SingleFile:    *singleFile,
+		Source:        *source,
+		SkipSubagents: *skipSubagents,
+		SlackToken:    envCfg.SlackBotToken,
+		SlackChannel:  envCfg.SlackChannel,
 	}
 
 	if *since != "" {
@@ -88,9 +97,6 @@ func runBackfill(args []string) {
 		}
 		cfg.Until = t.Add(24*time.Hour - time.Nanosecond) // end of day
 	}
-
-	// Load env config for DB + Anthropic credentials.
-	envCfg := config.Load()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -134,6 +140,8 @@ func runBackfill(args []string) {
 		"batch_size", cfg.BatchSize,
 		"min_messages", cfg.MinMessages,
 		"owner", cfg.OwnerUUID.String(),
+		"source", cfg.Source,
+		"skip_subagents", cfg.SkipSubagents,
 	)
 
 	runner := backfill.NewRunner(cfg, db, ext, slog.Default())
@@ -210,9 +218,9 @@ func runServe() {
 	}
 
 	// HTTP API
-	srv := api.NewServer(cfg.Port)
+	srv := api.NewServer(cfg.Port, cfg.APIToken)
 	go func() {
-		if err := srv.Start(); err != nil {
+		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server error", "error", err)
 		}
 	}()
@@ -234,6 +242,14 @@ func runServe() {
 	<-sigCh
 	slog.Info("shutting down")
 	cancel()
+
+	// Give in-flight HTTP requests up to 5 seconds to complete.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("HTTP server shutdown error", "error", err)
+	}
+
 	slog.Info("dredd stopped")
 }
 
