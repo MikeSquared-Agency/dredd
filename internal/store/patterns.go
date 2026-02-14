@@ -9,15 +9,31 @@ import (
 )
 
 // WriteReasoningPattern inserts a reasoning pattern extraction.
-func (s *Store) WriteReasoningPattern(ctx context.Context, ownerUUID uuid.UUID, sessionRef string, p extractor.ReasoningPattern) (uuid.UUID, error) {
+func (s *Store) WriteReasoningPattern(ctx context.Context, ownerUUID uuid.UUID, sessionRef string, p extractor.ReasoningPattern, opts ...WriteOpts) (uuid.UUID, error) {
+	var opt WriteOpts
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
 	id := uuid.New()
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO reasoning_patterns (id, owner_uuid, session_ref, pattern_type, summary, conversation_arc, tags, dredd_confidence, review_status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')`,
-		id, ownerUUID, sessionRef, p.PatternType, p.Summary, p.ConversationArc, p.Tags, p.Confidence,
-	)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("insert reasoning pattern: %w", err)
+	if opt.Embedding != nil {
+		_, err := s.pool.Exec(ctx, `
+			INSERT INTO reasoning_patterns (id, owner_uuid, session_ref, pattern_type, summary, conversation_arc, tags, dredd_confidence, embedding, review_status)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')`,
+			id, ownerUUID, sessionRef, p.PatternType, p.Summary, p.ConversationArc, p.Tags, p.Confidence, pgVector(opt.Embedding),
+		)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("insert reasoning pattern: %w", err)
+		}
+	} else {
+		_, err := s.pool.Exec(ctx, `
+			INSERT INTO reasoning_patterns (id, owner_uuid, session_ref, pattern_type, summary, conversation_arc, tags, dredd_confidence, review_status)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')`,
+			id, ownerUUID, sessionRef, p.PatternType, p.Summary, p.ConversationArc, p.Tags, p.Confidence,
+		)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("insert reasoning pattern: %w", err)
+		}
 	}
 	return id, nil
 }

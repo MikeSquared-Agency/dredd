@@ -6,25 +6,31 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/MikeSquared-Agency/dredd/internal/extractor"
+	"github.com/MikeSquared-Agency/dredd/internal/slack"
 	"github.com/MikeSquared-Agency/dredd/internal/store"
 )
 
 // Config holds the backfill command configuration.
 type Config struct {
-	CCDir       string
-	GatewayDir  string
-	Since       time.Time
-	Until       time.Time
-	DryRun      bool
-	BatchSize   int
-	MinMessages int
-	OwnerUUID   uuid.UUID
-	SingleFile  string // process a single file only
+	CCDir          string
+	GatewayDir     string
+	Since          time.Time
+	Until          time.Time
+	DryRun         bool
+	BatchSize      int
+	MinMessages    int
+	OwnerUUID      uuid.UUID
+	SingleFile     string // process a single file only
+	Source         string // source label for persisted records (default: "backfill")
+	SkipSubagents  bool   // skip conversations with no human messages (default: true)
+	SlackToken     string // optional: Slack bot token for posting summaries
+	SlackChannel   string // optional: Slack channel for summaries
 }
 
 // Runner orchestrates the backfill process.
@@ -32,17 +38,33 @@ type Runner struct {
 	cfg       Config
 	store     *store.Store
 	extractor *extractor.Extractor
+	slack     *slack.Poster
 	logger    *slog.Logger
 }
 
 // NewRunner creates a backfill runner.
 func NewRunner(cfg Config, s *store.Store, ext *extractor.Extractor, logger *slog.Logger) *Runner {
-	return &Runner{
+	r := &Runner{
 		cfg:       cfg,
 		store:     s,
 		extractor: ext,
 		logger:    logger,
 	}
+
+	// Set up optional Slack poster for daily summaries.
+	if cfg.SlackToken != "" && cfg.SlackChannel != "" {
+		r.slack = slack.NewPoster(cfg.SlackToken, cfg.SlackChannel, logger)
+	}
+
+	return r
+}
+
+// sourceLabel returns the source string to use for persisted records.
+func (r *Runner) sourceLabel() string {
+	if r.cfg.Source != "" {
+		return r.cfg.Source
+	}
+	return "backfill"
 }
 
 // Run executes the backfill process.
@@ -87,7 +109,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		if len(msgs) < r.cfg.MinMessages {
 			continue
 		}
-		if !r.hasHumanMessages(msgs) {
+		if r.cfg.SkipSubagents && !r.hasHumanMessages(msgs) {
 			continue
 		}
 		if !r.inDateRange(msgs) {
@@ -111,7 +133,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		if len(msgs) < r.cfg.MinMessages {
 			continue
 		}
-		if !r.hasHumanMessages(msgs) {
+		if r.cfg.SkipSubagents && !r.hasHumanMessages(msgs) {
 			continue
 		}
 		if !r.inDateRange(msgs) {
@@ -156,16 +178,29 @@ func (r *Runner) Run(ctx context.Context) error {
 	totalChunks := 0
 	chunksInBatch := 0
 
+	// Summary accumulator for Slack daily summaries.
+	var fileSummaries []FileSummary
+
 	for _, pf := range allFiles {
 		select {
 		case <-ctx.Done():
 			r.logger.Info("backfill interrupted, saving state")
 			_ = state.Save()
+			r.postBatchSummary(ctx, fileSummaries)
 			return ctx.Err()
 		default:
 		}
 
 		r.logger.Info("processing file", "path", pf.path, "messages", len(pf.msgs), "source", sourceStr(pf.source))
+
+		// Track per-file summary.
+		fs := FileSummary{
+			Path:   pf.path,
+			Source: sourceStr(pf.source),
+		}
+		if len(pf.msgs) > 0 && !pf.msgs[0].Timestamp.IsZero() {
+			fs.Date = pf.msgs[0].Timestamp.Format("2006-01-02")
+		}
 
 		// Chunk the conversation.
 		chunks := ChunkConversation(pf.msgs, pf.path, pf.source)
@@ -196,6 +231,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			if err != nil {
 				r.logger.Error("extraction failed", "session_ref", chunk.SessionRef, "error", err)
 				state.AddError(fmt.Sprintf("extract %s: %v", chunk.SessionRef, err))
+				fs.Errors++
 				continue
 			}
 
@@ -206,6 +242,7 @@ func (r *Runner) Run(ctx context.Context) error {
 				if err := r.persist(ctx, result); err != nil {
 					r.logger.Error("persist failed", "session_ref", chunk.SessionRef, "error", err)
 					state.AddError(fmt.Sprintf("persist %s: %v", chunk.SessionRef, err))
+					fs.Errors++
 					continue
 				}
 			}
@@ -214,6 +251,9 @@ func (r *Runner) Run(ctx context.Context) error {
 			totalPatterns += patterns
 			totalChunks++
 			chunksInBatch++
+			fs.Decisions += decisions
+			fs.Patterns += patterns
+			fs.Chunks++
 
 			r.logger.Info("chunk processed",
 				"session_ref", chunk.SessionRef,
@@ -235,6 +275,10 @@ func (r *Runner) Run(ctx context.Context) error {
 				_ = state.Save()
 				chunksInBatch = 0
 
+				// Post batch summary to Slack.
+				r.postBatchSummary(ctx, fileSummaries)
+				fileSummaries = nil
+
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -243,6 +287,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			}
 		}
 
+		fileSummaries = append(fileSummaries, fs)
 		state.MarkProcessed(pf.path)
 		state.FilesRemaining--
 		_ = state.Save()
@@ -250,6 +295,9 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	// Final save.
 	_ = state.Save()
+
+	// Post final summary.
+	r.postBatchSummary(ctx, fileSummaries)
 
 	r.logger.Info("backfill complete",
 		"files_processed", len(allFiles),
@@ -274,8 +322,9 @@ func (r *Runner) Run(ctx context.Context) error {
 }
 
 func (r *Runner) persist(ctx context.Context, result *extractor.ExtractionResult) error {
+	src := r.sourceLabel()
 	for _, d := range result.Decisions {
-		if _, err := r.store.WriteDecisionEpisode(ctx, result.OwnerUUID, result.SessionRef, "backfill", d); err != nil {
+		if _, err := r.store.WriteDecisionEpisode(ctx, result.OwnerUUID, result.SessionRef, src, d); err != nil {
 			return fmt.Errorf("write decision: %w", err)
 		}
 	}
@@ -285,6 +334,74 @@ func (r *Runner) persist(ctx context.Context, result *extractor.ExtractionResult
 		}
 	}
 	return nil
+}
+
+// postBatchSummary posts a daily summary of backfill results to Slack, grouped by date.
+// If Slack is not configured, it logs the summary instead.
+func (r *Runner) postBatchSummary(ctx context.Context, summaries []FileSummary) {
+	if len(summaries) == 0 {
+		return
+	}
+
+	text := FormatDailySummary(summaries)
+
+	if r.slack == nil {
+		r.logger.Info("backfill batch summary (no Slack configured)",
+			"summary", text,
+		)
+		return
+	}
+
+	// Post as a standalone message (not a thread reply).
+	if err := r.slack.PostThread(ctx, "", text); err != nil {
+		r.logger.Warn("failed to post batch summary to Slack, logging instead",
+			"error", err,
+			"summary", text,
+		)
+	}
+}
+
+// FormatDailySummary formats file summaries grouped by date.
+func FormatDailySummary(summaries []FileSummary) string {
+	// Group by date.
+	byDate := make(map[string][]FileSummary)
+	for _, s := range summaries {
+		date := s.Date
+		if date == "" {
+			date = "unknown"
+		}
+		byDate[date] = append(byDate[date], s)
+	}
+
+	// Sort dates.
+	dates := make([]string, 0, len(byDate))
+	for d := range byDate {
+		dates = append(dates, d)
+	}
+	sort.Strings(dates)
+
+	var sb strings.Builder
+	sb.WriteString("*Backfill Batch Summary*\n")
+
+	for _, date := range dates {
+		files := byDate[date]
+		totalDec, totalPat := 0, 0
+		for _, f := range files {
+			totalDec += f.Decisions
+			totalPat += f.Patterns
+		}
+		fmt.Fprintf(&sb, "\n*%s* (%d files, %d decisions, %d patterns)\n", date, len(files), totalDec, totalPat)
+		for _, f := range files {
+			name := filepath.Base(f.Path)
+			fmt.Fprintf(&sb, "  - %s [%s]: %d dec, %d pat", name, f.Source, f.Decisions, f.Patterns)
+			if f.Errors > 0 {
+				fmt.Fprintf(&sb, " (%d errors)", f.Errors)
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String()
 }
 
 func (r *Runner) discoverFiles() (ccFiles, gwFiles []string, err error) {
