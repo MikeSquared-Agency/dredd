@@ -9,7 +9,7 @@ func TestLoad_Defaults(t *testing.T) {
 	for _, key := range []string{
 		"DREDD_PORT", "NATS_URL", "NATS_TOKEN", "DATABASE_URL", "LOG_LEVEL",
 		"ANTHROPIC_API_KEY", "DREDD_MODEL", "SLACK_BOT_TOKEN",
-		"SLACK_DECISIONS_CHANNEL", "CHRONICLE_URL",
+		"SLACK_DECISIONS_CHANNEL", "CHRONICLE_URL", "DREDD_API_TOKEN",
 	} {
 		t.Setenv(key, "")
 	}
@@ -35,6 +35,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.ChronicleURL != "http://chronicle:8700" {
 		t.Errorf("expected default chronicle url, got %s", cfg.ChronicleURL)
 	}
+	if cfg.APIToken != "" {
+		t.Errorf("expected empty default api token, got %s", cfg.APIToken)
+	}
 }
 
 func TestLoad_CustomValues(t *testing.T) {
@@ -48,6 +51,7 @@ func TestLoad_CustomValues(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
 	t.Setenv("SLACK_DECISIONS_CHANNEL", "C12345")
 	t.Setenv("CHRONICLE_URL", "http://localhost:8700")
+	t.Setenv("DREDD_API_TOKEN", "dredd-secret-token")
 
 	cfg := Load()
 
@@ -80,6 +84,9 @@ func TestLoad_CustomValues(t *testing.T) {
 	}
 	if cfg.ChronicleURL != "http://localhost:8700" {
 		t.Errorf("expected custom chronicle url, got %s", cfg.ChronicleURL)
+	}
+	if cfg.APIToken != "dredd-secret-token" {
+		t.Errorf("expected custom api token, got %s", cfg.APIToken)
 	}
 }
 
