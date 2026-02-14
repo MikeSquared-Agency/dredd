@@ -1,6 +1,6 @@
 # Binaries
 bin/
-dredd
+/dredd
 *.exe
 
 # Environment
