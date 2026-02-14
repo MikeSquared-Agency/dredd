@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -210,9 +211,9 @@ func runServe() {
 	}
 
 	// HTTP API
-	srv := api.NewServer(cfg.Port)
+	srv := api.NewServer(cfg.Port, cfg.APIToken)
 	go func() {
-		if err := srv.Start(); err != nil {
+		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server error", "error", err)
 		}
 	}()
@@ -234,6 +235,14 @@ func runServe() {
 	<-sigCh
 	slog.Info("shutting down")
 	cancel()
+
+	// Give in-flight HTTP requests up to 5 seconds to complete.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("HTTP server shutdown error", "error", err)
+	}
+
 	slog.Info("dredd stopped")
 }
 
