@@ -7,7 +7,7 @@ import (
 func TestLoad_Defaults(t *testing.T) {
 	// Clear any env vars that might be set
 	for _, key := range []string{
-		"DREDD_PORT", "NATS_URL", "DATABASE_URL", "LOG_LEVEL",
+		"DREDD_PORT", "NATS_URL", "NATS_TOKEN", "DATABASE_URL", "LOG_LEVEL",
 		"ANTHROPIC_API_KEY", "DREDD_MODEL", "SLACK_BOT_TOKEN",
 		"SLACK_DECISIONS_CHANNEL", "CHRONICLE_URL",
 	} {
@@ -23,6 +23,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.NatsURL != "nats://hermes:4222" {
 		t.Errorf("expected default nats url, got %s", cfg.NatsURL)
 	}
+	if cfg.NatsToken != "" {
+		t.Errorf("expected empty default nats token, got %s", cfg.NatsToken)
+	}
 	if cfg.LogLevel != "info" {
 		t.Errorf("expected default log level info, got %s", cfg.LogLevel)
 	}
@@ -37,6 +40,7 @@ func TestLoad_Defaults(t *testing.T) {
 func TestLoad_CustomValues(t *testing.T) {
 	t.Setenv("DREDD_PORT", "9999")
 	t.Setenv("NATS_URL", "nats://custom:4222")
+	t.Setenv("NATS_TOKEN", "s3cr3t-token")
 	t.Setenv("DATABASE_URL", "postgres://test:test@localhost/dredd")
 	t.Setenv("LOG_LEVEL", "debug")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
@@ -52,6 +56,9 @@ func TestLoad_CustomValues(t *testing.T) {
 	}
 	if cfg.NatsURL != "nats://custom:4222" {
 		t.Errorf("expected custom nats url, got %s", cfg.NatsURL)
+	}
+	if cfg.NatsToken != "s3cr3t-token" {
+		t.Errorf("expected custom nats token, got %s", cfg.NatsToken)
 	}
 	if cfg.DatabaseURL != "postgres://test:test@localhost/dredd" {
 		t.Errorf("expected custom db url, got %s", cfg.DatabaseURL)

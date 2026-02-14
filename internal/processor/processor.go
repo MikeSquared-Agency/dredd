@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/MikeSquared-Agency/dredd/internal/extractor"
@@ -16,13 +19,14 @@ import (
 
 // Processor orchestrates Dredd's transcript processing pipeline.
 type Processor struct {
-	store     *store.Store
-	extractor *extractor.Extractor
-	hermes    *hermes.Client
-	slack     *slack.Poster
-	logger    *slog.Logger
+	store        *store.Store
+	extractor    *extractor.Extractor
+	hermes       *hermes.Client
+	slack        *slack.Poster
+	logger       *slog.Logger
+	chronicleURL string
 
-	// pendingReviews maps Slack message TS → extraction metadata for reaction handling.
+	mu             sync.Mutex
 	pendingReviews map[string]*pendingReview
 }
 
@@ -35,13 +39,14 @@ type pendingReview struct {
 	Patterns    []extractor.ReasoningPattern
 }
 
-func New(s *store.Store, ext *extractor.Extractor, h *hermes.Client, sl *slack.Poster, logger *slog.Logger) *Processor {
+func New(s *store.Store, ext *extractor.Extractor, h *hermes.Client, sl *slack.Poster, chronicleURL string, logger *slog.Logger) *Processor {
 	return &Processor{
 		store:          s,
 		extractor:      ext,
 		hermes:         h,
 		slack:          sl,
 		logger:         logger,
+		chronicleURL:   chronicleURL,
 		pendingReviews: make(map[string]*pendingReview),
 	}
 }
@@ -68,9 +73,8 @@ func (p *Processor) HandleTranscriptStored(subject string, data []byte) {
 		"owner", evt.OwnerUUID,
 	)
 
-	// Fetch transcript content from the event payload.
-	// The transcript text is expected in the event or fetched from Chronicle.
-	transcript, err := p.fetchTranscript(ctx, evt.SessionID)
+	// Fetch transcript content from the event payload or Chronicle.
+	transcript, err := p.fetchTranscript(ctx, evt)
 	if err != nil {
 		p.logger.Error("failed to fetch transcript", "session_id", evt.SessionID, "error", err)
 		return
@@ -96,6 +100,7 @@ func (p *Processor) HandleTranscriptStored(subject string, data []byte) {
 		if err != nil {
 			p.logger.Error("slack post failed", "error", err)
 		} else {
+			p.mu.Lock()
 			p.pendingReviews[ts] = &pendingReview{
 				SessionRef:  evt.SessionRef,
 				OwnerUUID:   ownerUUID,
@@ -104,6 +109,7 @@ func (p *Processor) HandleTranscriptStored(subject string, data []byte) {
 				Decisions:   result.Decisions,
 				Patterns:    result.Patterns,
 			}
+			p.mu.Unlock()
 		}
 	}
 
@@ -129,10 +135,14 @@ func (p *Processor) HandleReaction(subject string, data []byte) {
 		return // not a review reaction
 	}
 
+	p.mu.Lock()
 	review, ok := p.pendingReviews[evt.MessageTS]
 	if !ok {
+		p.mu.Unlock()
 		return // not a message we're tracking
 	}
+	delete(p.pendingReviews, evt.MessageTS)
+	p.mu.Unlock()
 
 	p.logger.Info("processing review reaction",
 		"reaction", evt.Reaction,
@@ -182,9 +192,6 @@ func (p *Processor) HandleReaction(subject string, data []byte) {
 			p.logger.Error("failed to post correction thread", "error", err)
 		}
 	}
-
-	// Clean up.
-	delete(p.pendingReviews, evt.MessageTS)
 }
 
 func (p *Processor) emitDecisionSignals(ctx context.Context, review *pendingReview, idx int, verdict slack.ReviewVerdict) {
@@ -278,11 +285,52 @@ func (p *Processor) persist(ctx context.Context, result *extractor.ExtractionRes
 	return decisionIDs, patternIDs, nil
 }
 
-func (p *Processor) fetchTranscript(ctx context.Context, sessionID string) (string, error) {
-	// TODO: Fetch from Chronicle API when transcript endpoints are available.
-	// For now, the transcript content should be included in the NATS event payload
-	// or fetched from a known storage location.
-	return "", fmt.Errorf("transcript fetch not yet implemented for session %s — Chronicle transcript API needed", sessionID)
+func (p *Processor) fetchTranscript(ctx context.Context, evt extractor.TranscriptEvent) (string, error) {
+	// Prefer transcript embedded in the event payload.
+	if evt.Transcript != "" {
+		return evt.Transcript, nil
+	}
+
+	// Fall back to Chronicle HTTP API.
+	if p.chronicleURL == "" {
+		return "", fmt.Errorf("no transcript in event payload and CHRONICLE_URL not configured for session %s", evt.SessionID)
+	}
+
+	url := fmt.Sprintf("%s/api/v1/events?trace_id=%s", p.chronicleURL, evt.SessionID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("build chronicle request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("chronicle request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("chronicle returned %d for session %s", resp.StatusCode, evt.SessionID)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read chronicle response: %w", err)
+	}
+
+	// Parse events and reconstruct transcript text.
+	var events []struct {
+		Metadata json.RawMessage `json:"metadata"`
+	}
+	if err := json.Unmarshal(body, &events); err != nil {
+		return "", fmt.Errorf("parse chronicle events: %w", err)
+	}
+
+	if len(events) == 0 {
+		return "", fmt.Errorf("no events found in chronicle for session %s", evt.SessionID)
+	}
+
+	// Return the raw events JSON as transcript input for the extractor.
+	return string(body), nil
 }
 
 func outcomeStr(correct bool) string {
