@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_DB: e2e_test
           POSTGRES_USER: test
@@ -47,7 +47,7 @@ jobs:
       - name: Run migrations
         run: |
           for f in migrations/*.sql; do
-            psql "$DB" -f "$f"
+            grep -v 'auth.role()' "$f" | grep -v 'enable row level security' | psql "$DB"
           done
         env:
           DB: postgres://test:test@localhost:5432/e2e_test

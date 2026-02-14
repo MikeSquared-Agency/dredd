@@ -164,19 +164,23 @@ func (p *Processor) HandleReaction(subject string, data []byte) {
 	// Emit pattern confirmation events.
 	if verdict == slack.VerdictConfirmed {
 		for _, pat := range review.Patterns {
-			p.hermes.Publish("swarm.dredd.pattern.confirmed", map[string]any{
+			if err := p.hermes.Publish("swarm.dredd.pattern.confirmed", map[string]any{
 				"pattern_type": pat.PatternType,
 				"summary":      pat.Summary,
 				"tags":         pat.Tags,
 				"owner_uuid":   review.OwnerUUID.String(),
 				"session_ref":  review.SessionRef,
-			})
+			}); err != nil {
+				p.logger.Error("failed to publish pattern confirmed", "error", err)
+			}
 		}
 	}
 
 	// On rejection, ask for correction in thread.
 	if verdict == slack.VerdictRejected && p.slack != nil {
-		p.slack.PostThread(ctx, evt.MessageTS, "What did I get wrong? Your correction is the highest-value training signal.")
+		if err := p.slack.PostThread(ctx, evt.MessageTS, "What did I get wrong? Your correction is the highest-value training signal."); err != nil {
+			p.logger.Error("failed to post correction thread", "error", err)
+		}
 	}
 
 	// Clean up.
@@ -192,13 +196,15 @@ func (p *Processor) emitDecisionSignals(ctx context.Context, review *pendingRevi
 
 	// Trust signal.
 	if dec.AgentID != "" {
-		p.hermes.Publish("swarm.dredd.trust.signal", map[string]any{
+		if err := p.hermes.Publish("swarm.dredd.trust.signal", map[string]any{
 			"agent_id":    dec.AgentID,
 			"category":    dec.Category,
 			"outcome":     outcomeStr(correct),
 			"severity":    dec.Severity,
 			"session_ref": review.SessionRef,
-		})
+		}); err != nil {
+			p.logger.Error("failed to publish trust signal", "error", err)
+		}
 
 		// Update trust score in DB.
 		rec, err := p.store.GetTrust(ctx, dec.AgentID, dec.Category, dec.Severity)
@@ -209,7 +215,9 @@ func (p *Processor) emitDecisionSignals(ctx context.Context, review *pendingRevi
 			if correct {
 				correctCount = 1
 			}
-			p.store.UpsertTrust(ctx, dec.AgentID, dec.Category, dec.Severity, score, total, correctCount, 0)
+			if err := p.store.UpsertTrust(ctx, dec.AgentID, dec.Category, dec.Severity, score, total, correctCount, 0); err != nil {
+				p.logger.Error("failed to create trust record", "error", err)
+			}
 		} else {
 			newScore := trust.UpdateScore(rec.TrustScore, dec.Severity, correct)
 			total := rec.TotalDecisions + 1
@@ -217,28 +225,34 @@ func (p *Processor) emitDecisionSignals(ctx context.Context, review *pendingRevi
 			if correct {
 				correctCount++
 			}
-			p.store.UpsertTrust(ctx, dec.AgentID, dec.Category, dec.Severity, newScore, total, correctCount, rec.CriticalFailures)
+			if err := p.store.UpsertTrust(ctx, dec.AgentID, dec.Category, dec.Severity, newScore, total, correctCount, rec.CriticalFailures); err != nil {
+				p.logger.Error("failed to update trust record", "error", err)
+			}
 		}
 	}
 
 	// Assignment signal (reassignment, budget correction, etc.).
 	if dec.SignalType != "" {
-		p.hermes.Publish("swarm.dredd.assignment.signal", map[string]any{
+		if err := p.hermes.Publish("swarm.dredd.assignment.signal", map[string]any{
 			"signal_type": dec.SignalType,
 			"agent_id":    dec.AgentID,
 			"category":    dec.Category,
 			"severity":    dec.Severity,
 			"session_ref": review.SessionRef,
-		})
+		}); err != nil {
+			p.logger.Error("failed to publish assignment signal", "error", err)
+		}
 	}
 
 	// Self-training on rejections.
 	if !correct {
-		p.hermes.Publish("swarm.dredd.extraction.rejected", map[string]any{
+		if err := p.hermes.Publish("swarm.dredd.extraction.rejected", map[string]any{
 			"session_ref": review.SessionRef,
 			"decision":    dec.Summary,
 			"category":    dec.Category,
-		})
+		}); err != nil {
+			p.logger.Error("failed to publish extraction rejected", "error", err)
+		}
 	}
 }
 

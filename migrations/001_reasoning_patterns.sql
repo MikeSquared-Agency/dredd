@@ -1,6 +1,8 @@
 -- 001_reasoning_patterns.sql
 -- Type 2 knowledge: reasoning patterns extracted from conversation transcripts.
 
+create extension if not exists vector;
+
 create table reasoning_patterns (
   id uuid primary key default gen_random_uuid(),
   owner_uuid uuid not null,
