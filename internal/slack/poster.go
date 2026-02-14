@@ -14,13 +14,14 @@ import (
 	"github.com/MikeSquared-Agency/dredd/internal/extractor"
 )
 
-const postMessageURL = "https://slack.com/api/chat.postMessage"
+const defaultPostMessageURL = "https://slack.com/api/chat.postMessage"
 
 type Poster struct {
 	token   string
 	channel string
 	client  *http.Client
 	logger  *slog.Logger
+	apiURL  string
 }
 
 func NewPoster(token, channel string, logger *slog.Logger) *Poster {
@@ -28,6 +29,7 @@ func NewPoster(token, channel string, logger *slog.Logger) *Poster {
 		token:   token,
 		channel: channel,
 		client:  &http.Client{Timeout: 10 * time.Second},
+		apiURL:  defaultPostMessageURL,
 		logger:  logger,
 	}
 }
@@ -63,7 +65,7 @@ func (p *Poster) PostReviewSummary(ctx context.Context, result *extractor.Extrac
 		return "", fmt.Errorf("marshal slack payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, postMessageURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiURL, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
@@ -108,7 +110,7 @@ func (p *Poster) PostThread(ctx context.Context, threadTS, text string) error {
 		return fmt.Errorf("marshal: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, postMessageURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

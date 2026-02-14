@@ -15,7 +15,7 @@ func (s *Store) WriteDecisionEpisode(ctx context.Context, ownerUUID uuid.UUID, s
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	// 1. Insert decision
 	decisionID := uuid.New()

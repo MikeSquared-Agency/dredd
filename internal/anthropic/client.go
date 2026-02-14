@@ -10,12 +10,13 @@ import (
 	"time"
 )
 
-const apiURL = "https://api.anthropic.com/v1/messages"
+const defaultAPIURL = "https://api.anthropic.com/v1/messages"
 
 type Client struct {
 	apiKey string
 	model  string
 	client *http.Client
+	apiURL string
 }
 
 func NewClient(apiKey, model string) *Client {
@@ -23,7 +24,13 @@ func NewClient(apiKey, model string) *Client {
 		apiKey: apiKey,
 		model:  model,
 		client: &http.Client{Timeout: 120 * time.Second},
+		apiURL: defaultAPIURL,
 	}
+}
+
+// SetTestTransport configures the client to point at a test server URL.
+func (c *Client) SetTestTransport(testURL string) {
+	c.apiURL = testURL
 }
 
 type Message struct {
@@ -71,7 +78,7 @@ func (c *Client) Complete(ctx context.Context, system string, messages []Message
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
