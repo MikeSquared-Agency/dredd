@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/MikeSquared-Agency/dredd/internal/anthropic"
 	"github.com/MikeSquared-Agency/dredd/internal/api"
+	"github.com/MikeSquared-Agency/dredd/internal/backfill"
 	"github.com/MikeSquared-Agency/dredd/internal/config"
 	"github.com/MikeSquared-Agency/dredd/internal/extractor"
 	"github.com/MikeSquared-Agency/dredd/internal/hermes"
@@ -19,6 +23,127 @@ import (
 )
 
 func main() {
+	// Route subcommands: "dredd" or "dredd serve" → service, "dredd backfill" → backfill.
+	if len(os.Args) > 1 && os.Args[1] == "backfill" {
+		runBackfill(os.Args[2:])
+		return
+	}
+
+	// Strip "serve" if provided, then run the service.
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		os.Args = append(os.Args[:1], os.Args[2:]...)
+	}
+
+	runServe()
+}
+
+func runBackfill(args []string) {
+	fs := flag.NewFlagSet("backfill", flag.ExitOnError)
+	ccDir := fs.String("cc-dir", "~/.claude/projects", "CC JSONL transcript directory")
+	gatewayDir := fs.String("gateway-dir", "~/.openclaw/agents/main/sessions", "Gateway session directory")
+	since := fs.String("since", "", "Only process files with messages after this date (YYYY-MM-DD)")
+	until := fs.String("until", "", "Only process files with messages before this date (YYYY-MM-DD)")
+	dryRun := fs.Bool("dry-run", false, "Parse and extract but don't write to DB")
+	batchSize := fs.Int("batch-size", 10, "Number of chunks to process before pausing")
+	minMessages := fs.Int("min-messages", 5, "Minimum messages per conversation to process")
+	owner := fs.String("owner", "9f6ed519-5763-4e30-9c2f-5580e0c57703", "Owner UUID for extracted records")
+	singleFile := fs.String("file", "", "Process a single file instead of directories")
+
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "parse flags: %v\n", err)
+		os.Exit(1)
+	}
+
+	setupLogging("info")
+
+	ownerUUID, err := uuid.Parse(*owner)
+	if err != nil {
+		slog.Error("invalid owner UUID", "owner", *owner, "error", err)
+		os.Exit(1)
+	}
+
+	cfg := backfill.Config{
+		CCDir:       *ccDir,
+		GatewayDir:  *gatewayDir,
+		DryRun:      *dryRun,
+		BatchSize:   *batchSize,
+		MinMessages: *minMessages,
+		OwnerUUID:   ownerUUID,
+		SingleFile:  *singleFile,
+	}
+
+	if *since != "" {
+		t, err := time.Parse("2006-01-02", *since)
+		if err != nil {
+			slog.Error("invalid --since date", "since", *since, "error", err)
+			os.Exit(1)
+		}
+		cfg.Since = t
+	}
+	if *until != "" {
+		t, err := time.Parse("2006-01-02", *until)
+		if err != nil {
+			slog.Error("invalid --until date", "until", *until, "error", err)
+			os.Exit(1)
+		}
+		cfg.Until = t.Add(24*time.Hour - time.Nanosecond) // end of day
+	}
+
+	// Load env config for DB + Anthropic credentials.
+	envCfg := config.Load()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle SIGINT for graceful shutdown during backfill.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		slog.Info("interrupt received, finishing current batch...")
+		cancel()
+	}()
+
+	// Anthropic client (always needed for extraction).
+	if envCfg.AnthropicAPIKey == "" {
+		slog.Error("ANTHROPIC_API_KEY is required")
+		os.Exit(1)
+	}
+	llm := anthropic.NewClient(envCfg.AnthropicAPIKey, envCfg.AnthropicModel)
+	ext := extractor.New(llm, slog.Default())
+
+	// Database (not needed for dry-run, but connect anyway for simplicity).
+	var db *store.Store
+	if !cfg.DryRun {
+		if envCfg.DatabaseURL == "" {
+			slog.Error("DATABASE_URL is required (use --dry-run to skip DB)")
+			os.Exit(1)
+		}
+		db, err = store.New(ctx, envCfg.DatabaseURL)
+		if err != nil {
+			slog.Error("failed to connect to database", "error", err)
+			os.Exit(1)
+		}
+		defer db.Close()
+	}
+
+	slog.Info("backfill starting",
+		"cc_dir", cfg.CCDir,
+		"gateway_dir", cfg.GatewayDir,
+		"dry_run", cfg.DryRun,
+		"batch_size", cfg.BatchSize,
+		"min_messages", cfg.MinMessages,
+		"owner", cfg.OwnerUUID.String(),
+	)
+
+	runner := backfill.NewRunner(cfg, db, ext, slog.Default())
+	if err := runner.Run(ctx); err != nil && err != context.Canceled {
+		slog.Error("backfill failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+func runServe() {
 	cfg := config.Load()
 	setupLogging(cfg.LogLevel)
 

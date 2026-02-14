@@ -259,7 +259,7 @@ func (p *Processor) emitDecisionSignals(ctx context.Context, review *pendingRevi
 func (p *Processor) persist(ctx context.Context, result *extractor.ExtractionResult) ([]uuid.UUID, []uuid.UUID, error) {
 	var decisionIDs []uuid.UUID
 	for _, d := range result.Decisions {
-		id, err := p.store.WriteDecisionEpisode(ctx, result.OwnerUUID, result.SessionRef, d)
+		id, err := p.store.WriteDecisionEpisode(ctx, result.OwnerUUID, result.SessionRef, "dredd", d)
 		if err != nil {
 			return nil, nil, fmt.Errorf("write decision: %w", err)
 		}
