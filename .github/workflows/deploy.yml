@@ -1,0 +1,19 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, openclaw]
+    steps:
+      - name: Pull latest
+        run: cd ~/dredd && git pull origin main
+
+      - name: Build image
+        run: cd ~/dredd && docker build -t dredd:latest .
+
+      - name: Update service
+        run: docker service update --force warren_dredd

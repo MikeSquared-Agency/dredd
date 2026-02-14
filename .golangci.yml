@@ -21,6 +21,8 @@ linters-settings:
       - encoding/json.Unmarshal
 
 issues:
+  exclude-dirs:
+    - vendor
   exclude-rules:
     - path: _test\.go
       linters:

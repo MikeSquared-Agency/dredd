@@ -1,0 +1,6 @@
+.github/workflows/ @DarlingtonDeveloper
+.github/CODEOWNERS @DarlingtonDeveloper
+cmd/ @DarlingtonDeveloper
+internal/ @DarlingtonDeveloper
+migrations/ @DarlingtonDeveloper
+Dockerfile @DarlingtonDeveloper
