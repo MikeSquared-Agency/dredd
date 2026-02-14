@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -34,15 +33,15 @@ func (s *Store) WriteDecisionEpisode(ctx context.Context, ownerUUID uuid.UUID, s
 	decisionID := uuid.New()
 	if opt.Embedding != nil {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO decisions (id, domain, category, severity, source, source_channel, decided_by, summary, session_ref, embedding, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())`,
-			decisionID, ep.Domain, ep.Category, ep.Severity, source, source, ownerUUID.String(), ep.Summary, sessionRef, pgVector(opt.Embedding),
+			INSERT INTO decisions (id, domain, category, severity, source, decided_by, summary, session_ref, embedding, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())`,
+			decisionID, ep.Domain, ep.Category, ep.Severity, source, ownerUUID.String(), ep.Summary, sessionRef, pgVector(opt.Embedding),
 		)
 	} else {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO decisions (id, domain, category, severity, source, source_channel, decided_by, summary, session_ref, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())`,
-			decisionID, ep.Domain, ep.Category, ep.Severity, source, source, ownerUUID.String(), ep.Summary, sessionRef,
+			INSERT INTO decisions (id, domain, category, severity, source, decided_by, summary, session_ref, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
+			decisionID, ep.Domain, ep.Category, ep.Severity, source, ownerUUID.String(), ep.Summary, sessionRef,
 		)
 	}
 	if err != nil {
@@ -59,39 +58,34 @@ func (s *Store) WriteDecisionEpisode(ctx context.Context, ownerUUID uuid.UUID, s
 		return uuid.Nil, fmt.Errorf("insert context: %w", err)
 	}
 
-	// 3. Insert decision_options (pro_signals/con_signals are jsonb in live schema)
+	// 3. Insert decision_options
 	for _, opt := range ep.Options {
-		proJSON, _ := json.Marshal(opt.ProSignals)
-		conJSON, _ := json.Marshal(opt.ConSignals)
 		_, err = tx.Exec(ctx, `
-			INSERT INTO decision_options (id, decision_id, option_key, option_label, pro_signals, con_signals, was_chosen)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			uuid.New(), decisionID, opt.OptionKey, opt.OptionKey, proJSON, conJSON, opt.WasChosen,
+			INSERT INTO decision_options (id, decision_id, option_key, pro_signals, con_signals, was_chosen)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			uuid.New(), decisionID, opt.OptionKey, opt.ProSignals, opt.ConSignals, opt.WasChosen,
 		)
 		if err != nil {
 			return uuid.Nil, fmt.Errorf("insert option: %w", err)
 		}
 	}
 
-	// 4. Insert decision_reasoning (factors/tradeoffs are jsonb in live schema)
-	factorsJSON, _ := json.Marshal(ep.Reasoning.Factors)
-	tradeoffsJSON, _ := json.Marshal(ep.Reasoning.Tradeoffs)
+	// 4. Insert decision_reasoning
 	_, err = tx.Exec(ctx, `
 		INSERT INTO decision_reasoning (id, decision_id, factors, tradeoffs, reasoning_text)
 		VALUES ($1, $2, $3, $4, $5)`,
-		uuid.New(), decisionID, factorsJSON, tradeoffsJSON, ep.Reasoning.ReasoningText,
+		uuid.New(), decisionID, ep.Reasoning.Factors, ep.Reasoning.Tradeoffs, ep.Reasoning.ReasoningText,
 	)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("insert reasoning: %w", err)
 	}
 
-	// 5. Insert decision_tags (composite PK on decision_id+tag, no id column)
+	// 5. Insert decision_tags
 	for _, tag := range ep.Tags {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO decision_tags (decision_id, tag, added_by)
-			VALUES ($1, $2, $3)
-			ON CONFLICT (decision_id, tag) DO NOTHING`,
-			decisionID, tag, source,
+			INSERT INTO decision_tags (id, decision_id, tag)
+			VALUES ($1, $2, $3)`,
+			uuid.New(), decisionID, tag,
 		)
 		if err != nil {
 			return uuid.Nil, fmt.Errorf("insert tag: %w", err)
