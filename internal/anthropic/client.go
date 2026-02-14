@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -83,8 +84,13 @@ func (c *Client) Complete(ctx context.Context, system string, messages []Message
 		return "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
+	if strings.HasPrefix(c.apiKey, "sk-ant-oat") {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	} else {
+		req.Header.Set("x-api-key", c.apiKey)
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
