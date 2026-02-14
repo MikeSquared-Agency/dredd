@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - run: go build ./...
+      - run: go test ./... -v -race -count=1
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@v6
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: e2e_test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+      nats:
+        image: nats:latest
+        ports:
+          - 4222:4222
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Run migrations
+        run: |
+          for f in migrations/*.sql; do
+            psql "$DB" -f "$f"
+          done
+        env:
+          DB: postgres://test:test@localhost:5432/e2e_test
+      - name: Build
+        run: go build -o ./bin/dredd ./cmd/dredd/
+      - name: Start service
+        run: ./bin/dredd &
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/e2e_test?sslmode=disable
+          NATS_URL: nats://localhost:4222
+          DREDD_PORT: "8750"
+          ANTHROPIC_API_KEY: "test-key"
+      - name: Wait for health
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8750/health && exit 0 || sleep 1
+          done
+          exit 1
