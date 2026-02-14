@@ -93,11 +93,13 @@ func main() {
 	}()
 
 	// Announce registration
-	hermesClient.Publish("swarm.agent.dredd.registered", map[string]any{
+	if err := hermesClient.Publish("swarm.agent.dredd.registered", map[string]any{
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 		"port":      cfg.Port,
 		"mode":      "shadow",
-	})
+	}); err != nil {
+		slog.Warn("failed to publish registration", "error", err)
+	}
 
 	slog.Info("dredd ready — shadow mode", "port", cfg.Port)
 
