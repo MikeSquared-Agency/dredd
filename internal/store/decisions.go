@@ -33,15 +33,15 @@ func (s *Store) WriteDecisionEpisode(ctx context.Context, ownerUUID uuid.UUID, s
 	decisionID := uuid.New()
 	if opt.Embedding != nil {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO decisions (id, domain, category, severity, source, decided_by, summary, session_ref, embedding, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())`,
-			decisionID, ep.Domain, ep.Category, ep.Severity, source, ownerUUID.String(), ep.Summary, sessionRef, pgVector(opt.Embedding),
+			INSERT INTO decisions (id, domain, category, severity, source, decided_by, summary, session_ref, embedding, model_id, model_tier, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())`,
+			decisionID, ep.Domain, ep.Category, ep.Severity, source, ownerUUID.String(), ep.Summary, sessionRef, pgVector(opt.Embedding), ep.ModelID, ep.ModelTier,
 		)
 	} else {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO decisions (id, domain, category, severity, source, decided_by, summary, session_ref, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
-			decisionID, ep.Domain, ep.Category, ep.Severity, source, ownerUUID.String(), ep.Summary, sessionRef,
+			INSERT INTO decisions (id, domain, category, severity, source, decided_by, summary, session_ref, model_id, model_tier, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())`,
+			decisionID, ep.Domain, ep.Category, ep.Severity, source, ownerUUID.String(), ep.Summary, sessionRef, ep.ModelID, ep.ModelTier,
 		)
 	}
 	if err != nil {
@@ -83,9 +83,9 @@ func (s *Store) WriteDecisionEpisode(ctx context.Context, ownerUUID uuid.UUID, s
 	// 5. Insert decision_tags
 	for _, tag := range ep.Tags {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO decision_tags (id, decision_id, tag)
-			VALUES ($1, $2, $3)`,
-			uuid.New(), decisionID, tag,
+			INSERT INTO decision_tags (decision_id, tag)
+			VALUES ($1, $2)`,
+			decisionID, tag,
 		)
 		if err != nil {
 			return uuid.Nil, fmt.Errorf("insert tag: %w", err)

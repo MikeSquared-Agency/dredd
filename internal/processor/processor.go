@@ -102,6 +102,12 @@ func (p *Processor) HandleTranscriptStored(subject string, data []byte) {
 		return
 	}
 
+	// Propagate model tracking fields from the transcript event to each decision.
+	for i := range result.Decisions {
+		result.Decisions[i].ModelID = evt.ModelID
+		result.Decisions[i].ModelTier = evt.ModelTier
+	}
+
 	// Persist extractions.
 	decisionIDs, patternIDs, err := p.persist(ctx, result)
 	if err != nil {
@@ -325,6 +331,24 @@ func (p *Processor) handleItemReaction(ctx context.Context, item *pendingItem, v
 					p.logger.Error("failed to publish extraction rejected", "error", err)
 				}
 			}
+
+			// Correction signal for prompt optimisation loop.
+			correctionType := "confirmed"
+			if !correct {
+				correctionType = "rejected"
+			}
+			if p.hermes != nil {
+				_ = p.hermes.Publish(hermes.SubjectCorrection, map[string]any{
+					"session_ref":     item.SessionRef,
+					"decision_id":     item.StoredID.String(),
+					"agent_id":        dec.AgentID,
+					"model_id":        dec.ModelID,
+					"model_tier":      dec.ModelTier,
+					"correction_type": correctionType,
+					"category":        dec.Category,
+					"severity":        dec.Severity,
+				})
+			}
 		}
 
 		if verdict == slack.VerdictRejected && p.slack != nil {
@@ -425,6 +449,24 @@ func (p *Processor) emitDecisionSignals(ctx context.Context, review *pendingRevi
 		}); err != nil {
 			p.logger.Error("failed to publish extraction rejected", "error", err)
 		}
+	}
+
+	// Correction signal for prompt optimisation loop.
+	correctionType := "confirmed"
+	if !correct {
+		correctionType = "rejected"
+	}
+	if p.hermes != nil {
+		_ = p.hermes.Publish(hermes.SubjectCorrection, map[string]any{
+			"session_ref":     review.SessionRef,
+			"decision_id":     review.DecisionIDs[idx].String(),
+			"agent_id":        dec.AgentID,
+			"model_id":        dec.ModelID,
+			"model_tier":      dec.ModelTier,
+			"correction_type": correctionType,
+			"category":        dec.Category,
+			"severity":        dec.Severity,
+		})
 	}
 }
 
