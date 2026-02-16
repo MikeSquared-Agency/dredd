@@ -22,6 +22,7 @@ func New(llm *anthropic.Client, logger *slog.Logger) *Extractor {
 type llmResponse struct {
 	Decisions []DecisionEpisode  `json:"decisions"`
 	Patterns  []ReasoningPattern `json:"patterns"`
+	Styles    []WritingStyle     `json:"styles"`
 }
 
 // Extract processes a transcript and returns structured extractions.
@@ -56,6 +57,7 @@ func (e *Extractor) Extract(ctx context.Context, sessionRef string, ownerUUID uu
 		"session_ref", sessionRef,
 		"decisions", len(resp.Decisions),
 		"patterns", len(resp.Patterns),
+		"styles", len(resp.Styles),
 	)
 
 	return &ExtractionResult{
@@ -63,5 +65,6 @@ func (e *Extractor) Extract(ctx context.Context, sessionRef string, ownerUUID uu
 		OwnerUUID:  ownerUUID,
 		Decisions:  resp.Decisions,
 		Patterns:   resp.Patterns,
+		Styles:     resp.Styles,
 	}, nil
 }

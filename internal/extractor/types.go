@@ -11,6 +11,8 @@ type TranscriptEvent struct {
 	Duration   string `json:"duration"`
 	Surface    string `json:"surface"`    // e.g. "cc", "slack", "web"
 	Transcript string `json:"transcript"` // full transcript text (preferred delivery method)
+	ModelID    string `json:"model_id,omitempty"`
+	ModelTier  string `json:"model_tier,omitempty"`
 }
 
 // ExtractionResult holds all extractions from a single transcript.
@@ -19,21 +21,24 @@ type ExtractionResult struct {
 	OwnerUUID  uuid.UUID
 	Decisions  []DecisionEpisode
 	Patterns   []ReasoningPattern
+	Styles     []WritingStyle
 }
 
 // DecisionEpisode is a Type 1 extraction — a directive decision.
 type DecisionEpisode struct {
-	Domain       string          `json:"domain"`
-	Category     string          `json:"category"`
-	Severity     string          `json:"severity"` // routine | significant | critical
-	Summary      string          `json:"summary"`
-	SituationText string         `json:"situation_text"`
-	Options      []DecisionOption `json:"options"`
-	Reasoning    DecisionReasoning `json:"reasoning"`
-	Tags         []string        `json:"tags"`
-	Confidence   float64         `json:"confidence"`
-	AgentID      string          `json:"agent_id,omitempty"` // if decision was about an agent's action
-	SignalType   string          `json:"signal_type,omitempty"` // reassignment, budget_correction, etc.
+	Domain        string            `json:"domain"`
+	Category      string            `json:"category"`
+	Severity      string            `json:"severity"` // routine | significant | critical
+	Summary       string            `json:"summary"`
+	SituationText string            `json:"situation_text"`
+	Options       []DecisionOption  `json:"options"`
+	Reasoning     DecisionReasoning `json:"reasoning"`
+	Tags          []string          `json:"tags"`
+	Confidence    float64           `json:"confidence"`
+	AgentID       string            `json:"agent_id,omitempty"`    // if decision was about an agent's action
+	SignalType    string            `json:"signal_type,omitempty"` // reassignment, budget_correction, etc.
+	ModelID       string            `json:"model_id,omitempty"`
+	ModelTier     string            `json:"model_tier,omitempty"`
 }
 
 // DecisionOption represents an alternative that was considered.
@@ -58,4 +63,17 @@ type ReasoningPattern struct {
 	ConversationArc string   `json:"conversation_arc"`
 	Tags            []string `json:"tags"`
 	Confidence      float64  `json:"confidence"`
+}
+
+// WritingStyle is a Type 3 extraction — a writing voice fingerprint.
+type WritingStyle struct {
+	Speaker     string   `json:"speaker"`      // who wrote this (human, agent name)
+	Context     string   `json:"context"`       // whatsapp, slack, pr_review, technical, casual
+	Samples     []string `json:"samples"`       // 2-5 verbatim quotes that exemplify the style
+	Traits      []string `json:"traits"`        // e.g. "terse", "dry_wit", "no_filler", "uses_dashes"
+	Vocabulary  []string `json:"vocabulary"`     // distinctive words/phrases they reach for
+	Patterns    []string `json:"patterns"`       // structural patterns e.g. "leads_with_answer", "bullet_lists"
+	Avoids      []string `json:"avoids"`         // things they never say or actively reject
+	EmojiStyle  string   `json:"emoji_style"`    // "none", "sparing", "frequent", description
+	Confidence  float64  `json:"confidence"`
 }

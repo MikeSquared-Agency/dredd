@@ -333,6 +333,11 @@ func (r *Runner) persist(ctx context.Context, result *extractor.ExtractionResult
 			return fmt.Errorf("write pattern: %w", err)
 		}
 	}
+	for _, s := range result.Styles {
+		if err := r.store.WriteStyle(ctx, result.OwnerUUID, result.SessionRef, src, s); err != nil {
+			return fmt.Errorf("write style: %w", err)
+		}
+	}
 	return nil
 }
 

@@ -40,6 +40,28 @@ For each pattern, extract:
 - tags: for retrieval (reframing, correction, architecture, philosophy, etc.)
 - confidence: 0.0-1.0 how certain you are this is a meaningful pattern
 
+## Type 3: Writing Style Fingerprints
+Capture HOW people communicate, not what they decided:
+- Sentence structure and length preferences
+- Distinctive vocabulary and recurring phrases
+- Tone markers (dry wit, directness, warmth, impatience)
+- What they NEVER say (corporate filler, hedging, etc.)
+- Emoji and punctuation habits
+- How style shifts by context (casual chat vs technical discussion)
+
+For each distinct speaker+context combination, extract:
+- speaker: who (e.g. "mike", "kai", "lily", "claude_code")
+- context: the communication context (whatsapp_casual, slack_technical, pr_review, planning, frustrated, relaxed)
+- samples: 2-5 VERBATIM quotes that best capture their voice (short, punchy, characteristic)
+- traits: style descriptors (e.g. "terse", "dry_wit", "leads_with_answer", "no_filler", "british_inflection")
+- vocabulary: distinctive words/phrases they reach for repeatedly
+- patterns: structural habits (e.g. "uses_dashes_for_asides", "bullet_over_prose", "question_then_answer")
+- avoids: things they actively reject or never use
+- emoji_style: how they use emoji ("none", "sparing_functional", "expressive")
+- confidence: 0.0-1.0
+
+Focus on what makes each voice DISTINCTIVE. Skip generic observations. If someone writes like everyone else in a chunk, don't extract a style for them.
+
 ## Confidence Scoring
 - High (>0.85): Clear directive, explicit reasoning in transcript
 - Medium (0.5-0.85): Implicit decision, reasoning inferred from context
@@ -50,9 +72,11 @@ For each pattern, extract:
 - Include the owner's exact words where possible
 - Don't fabricate — if reasoning isn't stated, mark confidence lower
 - A single conversation turn can contain multiple decisions or patterns
-- Some items are both a decision AND a pattern — extract both`
+- Some items are both a decision AND a pattern — extract both
+- Extract writing styles when you see distinctive voice — not every transcript will have them
+- Style extraction is about FINGERPRINTING a voice, not summarising content`
 
-const extractionUserPrompt = `Analyze this transcript and extract all decision episodes (Type 1) and reasoning patterns (Type 2).
+const extractionUserPrompt = `Analyze this transcript and extract all decision episodes (Type 1), reasoning patterns (Type 2), and writing style fingerprints (Type 3).
 
 Session: %s
 Owner: %s
@@ -96,6 +120,19 @@ Respond with valid JSON matching this schema:
       "summary": "string",
       "conversation_arc": "string",
       "tags": ["string"],
+      "confidence": 0.0-1.0
+    }
+  ],
+  "styles": [
+    {
+      "speaker": "string",
+      "context": "string",
+      "samples": ["string"],
+      "traits": ["string"],
+      "vocabulary": ["string"],
+      "patterns": ["string"],
+      "avoids": ["string"],
+      "emoji_style": "string",
       "confidence": 0.0-1.0
     }
   ]

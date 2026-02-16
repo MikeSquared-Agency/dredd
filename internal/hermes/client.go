@@ -10,6 +10,22 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// SubjectCorrection is the NATS subject for prompt-loop correction signals.
+const SubjectCorrection = "swarm.dredd.correction"
+
+// CorrectionSignal is emitted when a decision is confirmed or rejected,
+// enabling downstream prompt optimisation loops to adjust extraction quality.
+type CorrectionSignal struct {
+	SessionRef     string `json:"session_ref"`
+	DecisionID     string `json:"decision_id"`
+	AgentID        string `json:"agent_id"`
+	ModelID        string `json:"model_id"`
+	ModelTier      string `json:"model_tier"`
+	CorrectionType string `json:"correction_type"`
+	Category       string `json:"category"`
+	Severity       string `json:"severity"`
+}
+
 type Client struct {
 	conn   *nats.Conn
 	subs   []*nats.Subscription
