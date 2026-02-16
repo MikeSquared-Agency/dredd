@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -24,9 +25,14 @@ import (
 )
 
 func main() {
-	// Route subcommands: "dredd" or "dredd serve" → service, "dredd backfill" → backfill.
+	// Route subcommands: "dredd" or "dredd serve" → service, "dredd backfill" → backfill, "dredd dedup" → dedup.
 	if len(os.Args) > 1 && os.Args[1] == "backfill" {
 		runBackfill(os.Args[2:])
+		return
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "dedup" {
+		runDedup(os.Args[2:])
 		return
 	}
 
@@ -36,6 +42,92 @@ func main() {
 	}
 
 	runServe()
+}
+
+func runDedup(args []string) {
+	fs := flag.NewFlagSet("dedup", flag.ExitOnError)
+	threshold := fs.Float64("threshold", 0.92, "Similarity threshold (0.0-1.0)")
+	execute := fs.Bool("execute", false, "Execute deduplication (default is dry-run)")
+	table := fs.String("table", "all", "Table to deduplicate: patterns, decisions, or all")
+
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "parse flags: %v\n", err)
+		os.Exit(1)
+	}
+
+	setupLogging("info")
+
+	envCfg := config.Load()
+	if envCfg.DatabaseURL == "" {
+		slog.Error("DATABASE_URL is required")
+		os.Exit(1)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Database
+	db, err := store.New(ctx, envCfg.DatabaseURL)
+	if err != nil {
+		slog.Error("failed to connect to database", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	slog.Info("dedup starting",
+		"threshold", *threshold,
+		"execute", *execute,
+		"table", *table,
+	)
+
+	// Validate threshold
+	if *threshold < 0.0 || *threshold > 1.0 {
+		slog.Error("threshold must be between 0.0 and 1.0", "threshold", *threshold)
+		os.Exit(1)
+	}
+
+	// Validate table
+	if *table != "patterns" && *table != "decisions" && *table != "all" {
+		slog.Error("table must be 'patterns', 'decisions', or 'all'", "table", *table)
+		os.Exit(1)
+	}
+
+	logger := slog.Default()
+
+	// Execute deduplication
+	if *table == "patterns" || *table == "all" {
+		result, err := db.DeduplicateReasoningPatterns(ctx, *threshold, *execute, logger)
+		if err != nil {
+			slog.Error("failed to deduplicate reasoning patterns", "error", err)
+			os.Exit(1)
+		}
+
+		// Output result as JSON
+		output, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			slog.Error("failed to marshal result", "error", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(output))
+	}
+
+	if *table == "decisions" || *table == "all" {
+		result, err := db.DeduplicateDecisions(ctx, *threshold, *execute, logger)
+		if err != nil {
+			slog.Error("failed to deduplicate decisions", "error", err)
+			os.Exit(1)
+		}
+
+		// Output result as JSON
+		output, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			slog.Error("failed to marshal result", "error", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(output))
+	}
+
+	slog.Info("dedup completed")
 }
 
 func runBackfill(args []string) {
@@ -218,7 +310,7 @@ func runServe() {
 	}
 
 	// HTTP API
-	srv := api.NewServer(cfg.Port, cfg.APIToken)
+	srv := api.NewServer(cfg.Port, cfg.APIToken, db)
 	go func() {
 		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server error", "error", err)

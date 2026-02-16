@@ -10,15 +10,23 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/MikeSquared-Agency/dredd/internal/store"
 )
 
 type Server struct {
 	httpServer *http.Server
 	router     *chi.Mux
 	port       int
+	store      *store.Store
 }
 
-func NewServer(port int, apiToken string) *Server {
+type DedupRequest struct {
+	Threshold float64 `json:"threshold"`
+	Execute   bool    `json:"execute"`
+	Table     string  `json:"table"`
+}
+
+func NewServer(port int, apiToken string, db *store.Store) *Server {
 	router := chi.NewRouter()
 	router.Use(middleware.Logger)
 	router.Use(middleware.Recoverer)
@@ -26,6 +34,7 @@ func NewServer(port int, apiToken string) *Server {
 	s := &Server{
 		router: router,
 		port:   port,
+		store:  db,
 	}
 
 	// Health endpoint — unauthenticated (used by load balancers).
@@ -35,6 +44,7 @@ func NewServer(port int, apiToken string) *Server {
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Use(BearerAuthMiddleware(apiToken))
 		r.Get("/dredd/status", s.status)
+		r.Post("/dedup", s.dedup)
 	})
 
 	return s
@@ -92,4 +102,70 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"agent":  "dredd",
 		"status": "shadow", // Phase 1: shadow mode
 	})
+}
+
+func (s *Server) dedup(w http.ResponseWriter, r *http.Request) {
+	var req DedupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"invalid JSON: %v"}`, err), http.StatusBadRequest)
+		return
+	}
+
+	// Set defaults
+	if req.Threshold == 0 {
+		req.Threshold = 0.92
+	}
+	if req.Table == "" {
+		req.Table = "all"
+	}
+
+	// Validate threshold
+	if req.Threshold < 0.0 || req.Threshold > 1.0 {
+		http.Error(w, `{"error":"threshold must be between 0.0 and 1.0"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Validate table
+	if req.Table != "patterns" && req.Table != "decisions" && req.Table != "all" {
+		http.Error(w, `{"error":"table must be 'patterns', 'decisions', or 'all'"}`, http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	logger := slog.Default()
+
+	// Collect results
+	var results []interface{}
+
+	// Execute deduplication
+	if req.Table == "patterns" || req.Table == "all" {
+		result, err := s.store.DeduplicateReasoningPatterns(ctx, req.Threshold, req.Execute, logger)
+		if err != nil {
+			slog.Error("failed to deduplicate reasoning patterns", "error", err)
+			http.Error(w, fmt.Sprintf(`{"error":"failed to deduplicate reasoning patterns: %v"}`, err), http.StatusInternalServerError)
+			return
+		}
+		results = append(results, result)
+	}
+
+	if req.Table == "decisions" || req.Table == "all" {
+		result, err := s.store.DeduplicateDecisions(ctx, req.Threshold, req.Execute, logger)
+		if err != nil {
+			slog.Error("failed to deduplicate decisions", "error", err)
+			http.Error(w, fmt.Sprintf(`{"error":"failed to deduplicate decisions: %v"}`, err), http.StatusInternalServerError)
+			return
+		}
+		results = append(results, result)
+	}
+
+	// Return results
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	
+	// If single table, return the result directly; if all, return array
+	if len(results) == 1 {
+		json.NewEncoder(w).Encode(results[0])
+	} else {
+		json.NewEncoder(w).Encode(results)
+	}
 }

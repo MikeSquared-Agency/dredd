@@ -8,7 +8,7 @@ import (
 )
 
 func TestHealthEndpoint(t *testing.T) {
-	srv := NewServer(8750, "test-token")
+	srv := NewServer(8750, "test-token", nil)
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
@@ -29,7 +29,7 @@ func TestHealthEndpoint(t *testing.T) {
 
 func TestHealthEndpoint_NoAuthRequired(t *testing.T) {
 	// Health must be accessible without any token, even when auth is configured.
-	srv := NewServer(8750, "some-secret")
+	srv := NewServer(8750, "some-secret", nil)
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
@@ -41,7 +41,7 @@ func TestHealthEndpoint_NoAuthRequired(t *testing.T) {
 }
 
 func TestStatusEndpoint_WithValidToken(t *testing.T) {
-	srv := NewServer(8750, "test-token")
+	srv := NewServer(8750, "test-token", nil)
 
 	req := httptest.NewRequest("GET", "/api/v1/dredd/status", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
@@ -65,7 +65,7 @@ func TestStatusEndpoint_WithValidToken(t *testing.T) {
 }
 
 func TestStatusEndpoint_Unauthorized(t *testing.T) {
-	srv := NewServer(8750, "test-token")
+	srv := NewServer(8750, "test-token", nil)
 
 	// No Authorization header.
 	req := httptest.NewRequest("GET", "/api/v1/dredd/status", nil)
@@ -78,7 +78,7 @@ func TestStatusEndpoint_Unauthorized(t *testing.T) {
 }
 
 func TestStatusEndpoint_WrongToken(t *testing.T) {
-	srv := NewServer(8750, "test-token")
+	srv := NewServer(8750, "test-token", nil)
 
 	req := httptest.NewRequest("GET", "/api/v1/dredd/status", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
@@ -92,7 +92,7 @@ func TestStatusEndpoint_WrongToken(t *testing.T) {
 
 func TestStatusEndpoint_NoTokenConfigured(t *testing.T) {
 	// When no API token is configured, all requests are allowed.
-	srv := NewServer(8750, "")
+	srv := NewServer(8750, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/v1/dredd/status", nil)
 	w := httptest.NewRecorder()
@@ -104,7 +104,7 @@ func TestStatusEndpoint_NoTokenConfigured(t *testing.T) {
 }
 
 func TestNotFoundEndpoint(t *testing.T) {
-	srv := NewServer(8750, "")
+	srv := NewServer(8750, "", nil)
 
 	req := httptest.NewRequest("GET", "/nonexistent", nil)
 	w := httptest.NewRecorder()
