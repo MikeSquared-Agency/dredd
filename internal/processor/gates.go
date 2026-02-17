@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -172,4 +173,118 @@ func (p *Processor) HandleGateEvidence(subject string, data []byte) {
 			"prompt_version_id", evt.PromptVersionID,
 		)
 	}
+}
+
+// TaskPickedEvent matches the slack-gateway task picked event format.
+type TaskPickedEvent struct {
+	ItemID           string   `json:"item_id"`
+	ItemTitle        string   `json:"item_title"`
+	PickedBy         string   `json:"picked_by"`
+	OptionsPresented []string `json:"options_presented"`
+	Timestamp        string   `json:"timestamp"`
+}
+
+// HandleTaskPicked captures task picker selection decisions.
+func (p *Processor) HandleTaskPicked(subject string, data []byte) {
+	var evt TaskPickedEvent
+	if err := json.Unmarshal(data, &evt); err != nil {
+		p.logger.Warn("failed to parse task picked event", "error", err)
+		return
+	}
+
+	itemShort := evt.ItemID
+	if len(itemShort) > 8 {
+		itemShort = itemShort[:8]
+	}
+
+	// Build situation text with all options
+	situation := "Task picker presented " + strings.Join(evt.OptionsPresented, ", ")
+	if evt.ItemTitle != "" {
+		situation += ". User chose: " + evt.ItemTitle + " (" + itemShort + ")"
+	}
+
+	// Build options with chosen flag
+	var options []extractor.DecisionOption
+	for _, optID := range evt.OptionsPresented {
+		opt := extractor.DecisionOption{
+			OptionKey:  optID,
+			WasChosen:  optID == evt.ItemID,
+		}
+		if optID == evt.ItemID {
+			opt.ProSignals = []string{"selected by user"}
+		} else {
+			opt.ConSignals = []string{"skipped"}
+		}
+		options = append(options, opt)
+	}
+
+	ep := extractor.DecisionEpisode{
+		Domain:        "task_selection",
+		Category:      "pick",
+		Severity:      "routine",
+		Summary:       "Task picked: " + itemShort + " from " + fmt.Sprintf("%d", len(evt.OptionsPresented)) + " options",
+		SituationText: situation,
+		Options:       options,
+		Reasoning: extractor.DecisionReasoning{
+			ReasoningText: "User " + evt.PickedBy + " selected task " + itemShort,
+			Factors:       []string{"task_selection", "user_preference"},
+		},
+		Tags:       []string{"task_picker", "pick", itemShort},
+		Confidence: 1.0,
+		SignalType: "task_picked",
+	}
+
+	ctx := context.Background()
+	id, err := p.store.WriteDecisionEpisode(ctx, uuid.Nil, evt.ItemID, "slack-gateway", ep)
+	if err != nil {
+		p.logger.Error("failed to store task pick decision", "error", err, "item_id", itemShort)
+		return
+	}
+
+	p.logger.Info("task pick decision captured",
+		"decision_id", id,
+		"item_id", itemShort,
+		"options_count", len(evt.OptionsPresented),
+		"picked_by", evt.PickedBy,
+	)
+}
+
+// HandleTaskRegenerate captures when user rejects all presented options.
+func (p *Processor) HandleTaskRegenerate(subject string, data []byte) {
+	var evt struct {
+		OptionsPresented []string `json:"options_presented"`
+		UserID           string   `json:"user_id"`
+		Timestamp        string   `json:"timestamp"`
+	}
+	if err := json.Unmarshal(data, &evt); err != nil {
+		p.logger.Warn("failed to parse task regenerate event", "error", err)
+		return
+	}
+
+	ep := extractor.DecisionEpisode{
+		Domain:        "task_selection",
+		Category:      "regenerate",
+		Severity:      "significant",
+		Summary:       fmt.Sprintf("All %d options rejected — user requested regenerate", len(evt.OptionsPresented)),
+		SituationText: "Presented options: " + strings.Join(evt.OptionsPresented, ", ") + ". All rejected.",
+		Reasoning: extractor.DecisionReasoning{
+			ReasoningText: "User " + evt.UserID + " rejected all presented options",
+			Factors:       []string{"task_selection", "all_rejected"},
+		},
+		Tags:       []string{"task_picker", "regenerate", "negative"},
+		Confidence: 1.0,
+		SignalType: "task_regenerated",
+	}
+
+	ctx := context.Background()
+	id, err := p.store.WriteDecisionEpisode(ctx, uuid.Nil, "regenerate", "slack-gateway", ep)
+	if err != nil {
+		p.logger.Error("failed to store task regenerate decision", "error", err)
+		return
+	}
+
+	p.logger.Info("task regenerate decision captured",
+		"decision_id", id,
+		"options_rejected", len(evt.OptionsPresented),
+	)
 }
