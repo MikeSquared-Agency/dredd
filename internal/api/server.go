@@ -2,9 +2,6 @@ package api
 
 import (
 	"context"
-	"time"
-	"strconv"
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -171,4 +168,9 @@ func (s *Server) dedup(w http.ResponseWriter, r *http.Request) {
 	} else {
 		json.NewEncoder(w).Encode(results)
 	}
+}
+
+// Router returns the internal router for adding additional routes
+func (s *Server) Router() *chi.Mux {
+	return s.router
 }
