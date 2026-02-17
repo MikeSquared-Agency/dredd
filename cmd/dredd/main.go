@@ -309,6 +309,24 @@ func runServe() {
 		os.Exit(1)
 	}
 
+	// Subscribe to Slack interactions for gate decisions
+	if err := hermesClient.Subscribe("swarm.slack.interaction", proc.HandleGateDecision); err != nil {
+		slog.Error("failed to subscribe to gate decisions", "error", err)
+	}
+
+	// Subscribe to gate evidence for version attribution
+	if err := hermesClient.Subscribe("swarm.dispatch.*.gate.evidence", proc.HandleGateEvidence); err != nil {
+		slog.Error("failed to subscribe to gate evidence", "error", err)
+	}
+
+	// Subscribe to task picker decisions
+	if err := hermesClient.Subscribe("swarm.slack.task.picked", proc.HandleTaskPicked); err != nil {
+		slog.Error("failed to subscribe to task picked", "error", err)
+	}
+	if err := hermesClient.Subscribe("swarm.slack.task.regenerated", proc.HandleTaskRegenerate); err != nil {
+		slog.Error("failed to subscribe to task regenerated", "error", err)
+	}
+
 	// HTTP API
 	srv := api.NewServer(cfg.Port, cfg.APIToken, db)
 
