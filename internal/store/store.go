@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -35,4 +36,9 @@ func pgVector(v []float64) string {
 		parts[i] = fmt.Sprintf("%g", f)
 	}
 	return "[" + strings.Join(parts, ",") + "]"
+}
+
+// Query executes a query that returns rows
+func (s *Store) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
+	return s.pool.Query(ctx, sql, args...)
 }
