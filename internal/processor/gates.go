@@ -112,3 +112,64 @@ func (p *Processor) HandleGateDecision(subject string, data []byte) {
 		"user", evt.UserName,
 	)
 }
+
+
+// GateEvidenceEvent matches the Dispatch gate evidence NATS event.
+type GateEvidenceEvent struct {
+	ItemID          string `json:"item_id"`
+	ItemTitle       string `json:"item_title"`
+	Stage           string `json:"stage"`
+	Criterion       string `json:"criterion"`
+	Evidence        string `json:"evidence"`
+	SubmittedBy     string `json:"submitted_by"`
+	AgentID         string `json:"agent_id"`
+	PromptVersionID string `json:"prompt_version_id,omitempty"`
+}
+
+// HandleGateEvidence captures evidence submissions and logs prompt version attribution.
+func (p *Processor) HandleGateEvidence(subject string, data []byte) {
+	var evt GateEvidenceEvent
+	if err := json.Unmarshal(data, &evt); err != nil {
+		p.logger.Warn("failed to parse gate evidence event", "error", err)
+		return
+	}
+
+	// Only log if we have version attribution
+	if evt.PromptVersionID == "" {
+		return
+	}
+
+	p.logger.Info("gate evidence with version attribution",
+		"item_id", evt.ItemID[:8],
+		"stage", evt.Stage,
+		"criterion", evt.Criterion,
+		"prompt_version_id", evt.PromptVersionID,
+		"agent", evt.AgentID,
+	)
+
+	// Store as a decision episode tagged with the prompt version
+	ep := extractor.DecisionEpisode{
+		Domain:        "gate_evidence",
+		Category:      evt.Stage,
+		Severity:      "routine",
+		Summary:       "Evidence submitted for " + evt.ItemID[:8] + " stage " + evt.Stage + " criterion " + evt.Criterion,
+		SituationText: "Evidence: " + evt.Evidence,
+		Reasoning: extractor.DecisionReasoning{
+			ReasoningText: "Agent " + evt.AgentID + " submitted evidence using prompt version " + evt.PromptVersionID,
+			Factors:       []string{"prompt_version:" + evt.PromptVersionID},
+		},
+		Tags:       []string{"gate_evidence", evt.Stage, "version:" + evt.PromptVersionID},
+		Confidence: 1.0,
+		ModelID:    evt.PromptVersionID,
+	}
+
+	ctx := context.Background()
+	_, err := p.store.WriteDecisionEpisode(ctx, uuid.Nil, evt.ItemID, "dispatch", ep)
+	if err != nil {
+		p.logger.Error("failed to store versioned evidence",
+			"error", err,
+			"item_id", evt.ItemID[:8],
+			"prompt_version_id", evt.PromptVersionID,
+		)
+	}
+}

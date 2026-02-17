@@ -314,6 +314,11 @@ func runServe() {
 		slog.Error("failed to subscribe to gate decisions", "error", err)
 	}
 
+	// Subscribe to gate evidence for version attribution
+	if err := hermesClient.Subscribe("swarm.dispatch.*.gate.evidence", proc.HandleGateEvidence); err != nil {
+		slog.Error("failed to subscribe to gate evidence", "error", err)
+	}
+
 	// HTTP API
 	srv := api.NewServer(cfg.Port, cfg.APIToken, db)
 
