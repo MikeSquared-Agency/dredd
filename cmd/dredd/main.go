@@ -309,6 +309,11 @@ func runServe() {
 		os.Exit(1)
 	}
 
+	// Subscribe to Slack interactions for gate decisions
+	if err := hermesClient.Subscribe("swarm.slack.interaction", proc.HandleGateDecision); err != nil {
+		slog.Error("failed to subscribe to gate decisions", "error", err)
+	}
+
 	// HTTP API
 	srv := api.NewServer(cfg.Port, cfg.APIToken, db)
 
