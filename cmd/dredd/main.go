@@ -311,6 +311,9 @@ func runServe() {
 
 	// HTTP API
 	srv := api.NewServer(cfg.Port, cfg.APIToken, db)
+
+	// Add refinement routes
+	api.AddRefinementRoutes(srv.Router(), cfg.APIToken, db, hermesClient)
 	go func() {
 		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server error", "error", err)
